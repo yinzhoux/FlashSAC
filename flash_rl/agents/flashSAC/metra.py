@@ -1,4 +1,5 @@
 from .agent import *
+from .agent import _sample_flashsac_actions
 from .network import SkillEncoder
 
 class METRAConfig(FlashSACConfig):
@@ -164,11 +165,17 @@ class METRAAgent(FlashSACAgent):
     ):
         super().__init__(observation_space, action_space, env_info, cfg)
 
+        # Store original observation dims.
+        self._raw_critic_observation_dim = self._critic_observation_dim
+        self._raw_actor_observation_dim = self._actor_observation_dim
         self._skill_dim = skill_dim
         self._skill_encoder_hidden_dim = skill_encoder_hidden_dim
         self._skill_encoder_num_layers = skill_encoder_num_layers
+        # skill-conditioned observation
+        self._actor_observation_dim = self._raw_actor_observation_dim + self._skill_dim
+        self._critic_observation_dim = self._raw_critic_observation_dim + self._skill_dim
 
-        # Observation dim change
+        # Replace parent networks with skill-conditioned networks.
         (
             self._actor,
             self._critic,
@@ -176,8 +183,8 @@ class METRAAgent(FlashSACAgent):
             self._temperature,
             self._skill_encoder,
         ) = _init_metra_networks(
-            actor_observation_dim=self._actor_observation_dim,
-            critic_observation_dim=self._critic_observation_dim,
+            actor_observation_dim=self._raw_actor_observation_dim,
+            critic_observation_dim=self._raw_critic_observation_dim,
             action_dim=self._action_dim,
             skill_dim=self._skill_dim,
             skill_encoder_hidden_dim=self._skill_encoder_hidden_dim,
@@ -185,4 +192,70 @@ class METRAAgent(FlashSACAgent):
             cfg=self._cfg,
             device=self._device,
         )
-        self._decoder = self._skill_encoder
+
+        # Rollout-time skill state. These are initialized lazily once the number
+        # of vectorized environments is known. (Runtime state)
+        self._train_skills: Optional[torch.Tensor] = None
+        self._eval_skills: Optional[torch.Tensor] = None
+        self._train_skill_resample_steps: Optional[torch.Tensor] = None
+
+    def _sample_skills(self, num_envs: int) -> torch.Tensor:
+        """
+        Sample skill vector from unit circle.
+        """
+        skills = torch.randn((num_envs, self._skill_dim), device=self._device)
+        return torch.nn.functional.normalize(skills, dim=-1)
+
+    def _ensure_rollout_skill_state(self, num_envs: int, training: bool) -> torch.Tensor:
+        """
+        skill states initializer.
+        """
+        if training:
+            if self._train_skills is None or self._train_skills.shape[0] != num_envs:
+                self._train_skills = self._sample_skills(num_envs)
+                self._train_skill_resample_steps = torch.zeros(num_envs, dtype=torch.int64, device=self._device)
+            assert self._train_skills is not None
+            return self._train_skills
+
+        if self._eval_skills is None or self._eval_skills.shape[0] != num_envs:
+            self._eval_skills = self._sample_skills(num_envs)
+        return self._eval_skills
+
+    def _augment_actor_observations(
+        self,
+        observations: torch.Tensor,
+        skills: torch.Tensor,
+    ) -> torch.Tensor:
+        actor_observations = observations
+        if self._cfg.asymmetric_observation:
+            actor_observations = actor_observations[:, : self._raw_actor_observation_dim]
+        return torch.cat([actor_observations, skills], dim=-1)
+
+    def sample_actions(
+        self,
+        interaction_step: int,
+        prev_transition: MutableMapping[str, Tensor],
+        training: bool,
+    ) -> Tensor:
+        temperature = 1.0 if training else 0.0
+        observations = torch.as_tensor(prev_transition["next_observation"], dtype=torch.float32).to(self._device)
+        skills = self._ensure_rollout_skill_state(observations.shape[0], training=training)
+        actor_observations = self._augment_actor_observations(observations, skills)
+
+        with torch.no_grad():
+            (
+                self._cached_noise,
+                actions,
+                self._cur_noise_repeat_count,
+                self._cur_noise_repeat_n,
+            ) = _sample_flashsac_actions(
+                actor=self._actor,
+                noise=self._cached_noise,
+                observations=actor_observations,
+                temperature=temperature,
+                cur_count=self._cur_noise_repeat_count,
+                cur_n=self._cur_noise_repeat_n,
+                zeta_cdf=self._zeta_cdf,
+            )
+
+        return actions.cpu().numpy()
