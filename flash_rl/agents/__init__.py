@@ -37,6 +37,15 @@ def create_agent(
         config = FlashSACConfig(**cfg_dict)  # type: ignore
         agent = FlashSACAgent(observation_space, action_space, env_info, config)
 
+    elif agent_type == "metra":
+        from flash_rl.agents.flashSAC.metra import (
+            METRAAgent,
+            METRAConfig,
+        )
+
+        config = METRAConfig(**cfg_dict)  # type: ignore
+        agent = METRAAgent(observation_space, action_space, env_info, config)
+
     else:
         raise NotImplementedError
 

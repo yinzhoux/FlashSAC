@@ -4,8 +4,14 @@ from .agent import _update_networks
 from .network import SkillEncoder
 from flash_rl.buffers.metra_buffer import METRATorchBuffer
 
+@dataclass
 class METRAConfig(FlashSACConfig):
-    pass
+    skill_dim: int
+    skill_encoder_hidden_dim: int
+    skill_encoder_num_layers: int
+    skill_reward_scale: float
+    constraint_epsilon: float
+    dual_lambda_initial_value: float
 
 
 def _compute_metra_intrinsic_reward(
@@ -128,7 +134,7 @@ def _init_metra_networks(
     skill_dim: int,
     skill_encoder_hidden_dim: int,
     skill_encoder_num_layers: int,
-    cfg: FlashSACConfig,
+    cfg: METRAConfig,
     device: torch.device,
 ) -> tuple[Network, Network, Network, Network, Network, Network]:
     # Create learning rate schedule
@@ -259,8 +265,7 @@ def _init_metra_networks(
         use_weight_normalization=True,
     )
 
-    dual_lambda_initial_value = float(getattr(cfg, "dual_lambda_initial_value", getattr(cfg, "constraint_weight", 1.0)))
-    dual_lambda_net = FlashSACTemperature(dual_lambda_initial_value).to(device)
+    dual_lambda_net = FlashSACTemperature(cfg.dual_lambda_initial_value).to(device)
     dual_lambda_optimizer = optim.Adam(
         dual_lambda_net.parameters(),
         lr=cfg.learning_rate_peak,
@@ -293,19 +298,16 @@ class METRAAgent(FlashSACAgent):
             observation_space, 
             action_space, 
             env_info, 
-            cfg,
-            skill_dim: int,
-            skill_encoder_hidden_dim: int = 256,
-            skill_encoder_num_layers: int = 2,
+            cfg: METRAConfig,
     ):
         super().__init__(observation_space, action_space, env_info, cfg)
 
         # Store original observation dims.
         self._raw_critic_observation_dim = self._critic_observation_dim
         self._raw_actor_observation_dim = self._actor_observation_dim
-        self._skill_dim = skill_dim
-        self._skill_encoder_hidden_dim = skill_encoder_hidden_dim
-        self._skill_encoder_num_layers = skill_encoder_num_layers
+        self._skill_dim = cfg.skill_dim
+        self._skill_encoder_hidden_dim = cfg.skill_encoder_hidden_dim
+        self._skill_encoder_num_layers = cfg.skill_encoder_num_layers
         # skill-conditioned observation
         self._actor_observation_dim = self._raw_actor_observation_dim + self._skill_dim
         self._critic_observation_dim = self._raw_critic_observation_dim + self._skill_dim
@@ -455,8 +457,8 @@ class METRAAgent(FlashSACAgent):
             skill_encoder=self._skill_encoder,
             dual_lambda=self._dual_lambda,
             batch=batch,
-            reward_scale=float(getattr(self._cfg, "skill_reward_scale", 1.0)),
-            constraint_epsilon=float(getattr(self._cfg, "constraint_epsilon", getattr(self._cfg, "constraint_margin", 1.0))),
+            reward_scale=self._cfg.skill_reward_scale,
+            constraint_epsilon=self._cfg.constraint_epsilon,
             device=self._device,
             use_amp=self._cfg.use_amp,
             grad_scaler=self._grad_scaler,
