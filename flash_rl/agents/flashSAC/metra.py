@@ -1,10 +1,89 @@
 from .agent import *
 from .agent import _sample_flashsac_actions
+from .agent import _update_networks
 from .network import SkillEncoder
 from flash_rl.buffers.metra_buffer import METRATorchBuffer
 
 class METRAConfig(FlashSACConfig):
     pass
+
+
+def _compute_metra_intrinsic_reward(
+    current_features: torch.Tensor,
+    next_features: torch.Tensor,
+    skills: torch.Tensor,
+    reward_scale: float,
+    normalize_delta: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    delta_features = next_features - current_features
+    reward_features = delta_features
+    if normalize_delta:
+        reward_features = torch.nn.functional.normalize(reward_features, dim=-1, eps=1e-8)
+
+    intrinsic_reward = reward_scale * torch.sum(reward_features * skills, dim=-1)
+    return intrinsic_reward, delta_features
+
+
+def _update_metra_skill_encoder(
+    skill_encoder: Network,
+    batch: dict[str, torch.Tensor],
+    reward_scale: float,
+    constraint_weight: float,
+    constraint_margin: float,
+    normalize_delta: bool,
+    device: torch.device,
+    use_amp: bool,
+    grad_scaler: Optional[GradScaler],
+) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    raw_observations = batch["raw_observation"]
+    raw_next_observations = batch["raw_next_observation"]
+    skills = torch.nn.functional.normalize(batch["skill"], dim=-1, eps=1e-8)
+
+    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
+        current_features = skill_encoder(observations=raw_observations, training=True)
+        next_features = skill_encoder(observations=raw_next_observations, training=True)
+
+        # Clone compiled outputs before reuse to avoid overwritten CUDAGraph buffers.
+        current_features = current_features.clone()
+        next_features = next_features.clone()
+
+        intrinsic_reward, delta_features = _compute_metra_intrinsic_reward(
+            current_features=current_features,
+            next_features=next_features,
+            skills=skills,
+            reward_scale=reward_scale,
+            normalize_delta=normalize_delta,
+        )
+        delta_norm = torch.linalg.vector_norm(delta_features, dim=-1)
+        constraint_violation = torch.relu(delta_norm - constraint_margin)
+        constraint_loss = torch.square(constraint_violation).mean()
+        alignment_loss = -intrinsic_reward.mean()
+        skill_encoder_loss = alignment_loss + constraint_weight * constraint_loss
+
+    assert skill_encoder.optimizer is not None
+    skill_encoder.optimizer.zero_grad(set_to_none=True)
+    if use_amp:
+        assert grad_scaler is not None
+        grad_scaler.scale(skill_encoder_loss).backward()
+        grad_scaler.step(skill_encoder.optimizer)
+        grad_scaler.update()
+    else:
+        skill_encoder_loss.backward()
+        skill_encoder.optimizer.step()
+
+    if skill_encoder.scheduler is not None:
+        skill_encoder.scheduler.step()
+    skill_encoder.normalize_parameters()
+
+    update_info = {
+        "loss": skill_encoder_loss,
+        "alignment_loss": alignment_loss,
+        "constraint_loss": constraint_loss,
+        "mean_intrinsic_reward": intrinsic_reward.mean(),
+        "mean_delta_norm": delta_norm.mean(),
+    }
+    update_info = {f"skill_encoder/{key}": value for key, value in update_info.items()}
+    return update_info, intrinsic_reward.detach()
 
 
 def _init_metra_networks(
@@ -245,6 +324,14 @@ class METRAAgent(FlashSACAgent):
             actor_observations = actor_observations[:, : self._raw_actor_observation_dim]
         return torch.cat([actor_observations, skills], dim=-1)
 
+    def _augment_critic_observations(
+        self,
+        observations: torch.Tensor,
+        skills: torch.Tensor,
+    ) -> torch.Tensor:
+        critic_observations = observations[:, : self._raw_critic_observation_dim]
+        return torch.cat([critic_observations, skills], dim=-1)
+
     def sample_actions(
         self,
         interaction_step: int,
@@ -295,3 +382,67 @@ class METRAAgent(FlashSACAgent):
         if torch.any(done):
             skills[done] = self._sample_skills(int(done.sum().item()))
             self._train_skill_resample_steps[done] = 0
+
+    def update(self) -> dict[str, Any]:
+        batch = cast(dict[str, torch.Tensor], self._replay_buffer.sample())
+
+        for key, value in batch.items():
+            batch[key] = value.to(self._device, non_blocking=True)
+
+        batch["raw_observation"] = batch["observation"]
+        batch["raw_next_observation"] = batch["next_observation"]
+        skills = batch["skill"]
+        raw_observations = batch["raw_observation"]
+        raw_next_observations = batch["raw_next_observation"]
+
+        skill_encoder_info, intrinsic_reward = _update_metra_skill_encoder(
+            skill_encoder=self._skill_encoder,
+            batch=batch,
+            reward_scale=float(getattr(self._cfg, "skill_reward_scale", 1.0)),
+            constraint_weight=float(getattr(self._cfg, "constraint_weight", 0.0)),
+            constraint_margin=float(getattr(self._cfg, "constraint_margin", 1.0)),
+            normalize_delta=bool(getattr(self._cfg, "use_skill_normalization", True)),
+            device=self._device,
+            use_amp=self._cfg.use_amp,
+            grad_scaler=self._grad_scaler,
+        )
+
+        batch["reward"] = intrinsic_reward
+        batch["observation"] = self._augment_critic_observations(raw_observations, skills)
+        batch["next_observation"] = self._augment_critic_observations(raw_next_observations, skills)
+        batch["actor_observation"] = self._augment_actor_observations(raw_observations, skills)
+        batch["actor_next_observation"] = self._augment_actor_observations(
+            raw_next_observations,
+            skills,
+        )
+
+        if self._cfg.normalize_reward:
+            assert self.reward_normalizer is not None
+            batch["reward"] = self.reward_normalizer.normalize_rewards(batch["reward"])
+
+        _update_info = _update_networks(
+            batch=batch,
+            actor=self._actor,
+            critic=self._critic,
+            target_critic=self._target_critic,
+            temperature=self._temperature,
+            cfg=self._cfg,
+            do_actor_update=(self._update_step % self._cfg.actor_update_period == 0),
+            device=self._device,
+            grad_scaler=self._grad_scaler,
+        )
+        self._update_step += 1
+
+        update_info: dict[str, float] = {}
+        for key, value in skill_encoder_info.items():
+            if isinstance(value, torch.Tensor):
+                update_info[key] = value.item()
+            elif not isinstance(value, dict):
+                update_info[key] = float(value)
+        for key, value in _update_info.items():
+            if isinstance(value, torch.Tensor):
+                update_info[key] = value.item()
+            elif not isinstance(value, dict):
+                update_info[key] = float(value)
+
+        return update_info
