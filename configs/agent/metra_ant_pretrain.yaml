@@ -51,7 +51,7 @@ skill_encoder_hidden_dim: 1024
 skill_encoder_num_layers: 2
 skill_reward_scale: 1.0
 constraint_epsilon: 1e-3
-dual_lambda_initial_value: 30.0
+dual_lambda_initial_value: 3.0
 
 use_compile: false
 compile_mode: 'auto'
