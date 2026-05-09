@@ -69,7 +69,7 @@ def _update_metra_skill_encoder(
             squared_distance=squared_distance,
             epsilon=constraint_epsilon,
         )
-        lambda_value = dual_lambda().detach()
+        lambda_value = dual_lambda().detach().clone()
         skill_encoder_objective = alignment + lambda_value * constraint_term
         skill_encoder_loss = -skill_encoder_objective.mean()
 
@@ -108,7 +108,7 @@ def _update_metra_dual_lambda(
     with torch.no_grad():
         constraint_term = constraint_term.detach()
 
-    lambda_value = dual_lambda()
+    lambda_value = dual_lambda().clone()
     dual_lambda_loss = (lambda_value * constraint_term).mean()
 
     assert dual_lambda.optimizer is not None
@@ -119,7 +119,7 @@ def _update_metra_dual_lambda(
     if dual_lambda.scheduler is not None:
         dual_lambda.scheduler.step()
 
-    updated_lambda = dual_lambda().detach()
+    updated_lambda = dual_lambda().detach().clone()
     return {
         "dual_lambda/loss": dual_lambda_loss.detach(),
         "dual_lambda/value": updated_lambda,
