@@ -357,6 +357,29 @@ class METRAAgent(FlashSACAgent):
         skills = torch.randn((num_envs, self._skill_dim), device=self._device)
         return torch.nn.functional.normalize(skills, dim=-1)
 
+    def set_eval_skills(self, skills: Tensor, normalize: bool = True) -> None:
+        """Set fixed evaluation skills used when ``training=False`` rollouts."""
+        skill_tensor = torch.as_tensor(skills, dtype=torch.float32, device=self._device)
+        if skill_tensor.ndim == 1:
+            skill_tensor = skill_tensor.unsqueeze(0)
+        if skill_tensor.ndim != 2:
+            raise ValueError(
+                f"Expected skills to have shape (num_envs, skill_dim) or (skill_dim,), got {tuple(skill_tensor.shape)}"
+            )
+        if skill_tensor.shape[-1] != self._skill_dim:
+            raise ValueError(
+                f"Skill dim mismatch: expected {self._skill_dim}, got {skill_tensor.shape[-1]}"
+            )
+
+        if normalize:
+            skill_tensor = torch.nn.functional.normalize(skill_tensor, dim=-1, eps=1e-8)
+        self._eval_skills = skill_tensor.clone()
+
+    def get_eval_skills(self) -> Optional[torch.Tensor]:
+        if self._eval_skills is None:
+            return None
+        return self._eval_skills.detach().clone()
+
     def _ensure_rollout_skill_state(self, num_envs: int, training: bool) -> torch.Tensor:
         """
         skill states initializer.
