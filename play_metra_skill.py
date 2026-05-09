@@ -51,6 +51,18 @@ def _to_uint8(frame: np.ndarray) -> np.ndarray:
     return frame.astype(np.uint8)
 
 
+def _generate_eval_skills(skill_dim: int, num_skills: int, seed: int) -> np.ndarray:
+    if skill_dim == 2:
+        angles = np.linspace(0, 2 * np.pi, num_skills, endpoint=False, dtype=np.float32)
+        return np.stack([np.cos(angles), np.sin(angles)], axis=1)
+
+    rng = np.random.default_rng(seed)
+    skills = rng.standard_normal((num_skills, skill_dim), dtype=np.float32)
+    norms = np.linalg.norm(skills, axis=1, keepdims=True)
+    norms = np.clip(norms, 1e-8, None)
+    return skills / norms
+
+
 def play_and_record(args: argparse.Namespace) -> None:
     OmegaConf.register_new_resolver("eval", lambda s: eval(s))
     hydra.initialize(version_base=None, config_path=args.config_path)
@@ -93,12 +105,10 @@ def play_and_record(args: argparse.Namespace) -> None:
         raise ValueError("METRA agent does not expose set_eval_skills().")
 
 
-    # 自动生成10个skill方向（单位圆等分）
+    # 2D skill: unit circle sweep. Higher-D skill: deterministic unit hypersphere samples.
     skill_dim = int(cfg.agent.skill_dim)
-    assert skill_dim == 2, "只支持 skill_dim=2 的情况（二维skill）"
     num_skills = 10
-    angles = np.linspace(0, 2 * np.pi, num_skills, endpoint=False)
-    skills_list = np.stack([np.cos(angles), np.sin(angles)], axis=1)  # (10, 2)
+    skills_list = _generate_eval_skills(skill_dim=skill_dim, num_skills=num_skills, seed=cfg.seed)
 
     for idx, skill in enumerate(skills_list):
         agent.set_eval_skills(skill[None, :], normalize=True)
