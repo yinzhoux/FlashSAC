@@ -5,7 +5,7 @@
 project_name: 'FlashRL'
 entity_name: 'draftrec'
 group_name: 'metra_ant_pretrain'
-exp_name: 'ant_skill_pretrain-l3.0'
+exp_name: 'ant_skill_pretrain'
 seed: 0
 
 logger_type: 'tensorboard'
@@ -17,7 +17,7 @@ buffer_load_path: null
 # Environment
 ##################################################################################
 
-num_env_steps: 10_000_000
+num_env_steps: 100_000_000
 num_train_envs: 8
 num_eval_envs: 1
 num_record_envs: 1
@@ -39,7 +39,7 @@ num_update_steps: ${eval:'${num_interaction_steps} * (${updates_per_interaction_
 evaluation_per_interaction_step: ${eval:'int(${num_interaction_steps} / 20)'}
 metrics_per_interaction_step: ${eval:'int(${num_interaction_steps} / 20)'}
 recording_per_interaction_step: null
-logging_per_interaction_step: ${eval:'int(${num_interaction_steps} / 2000)'}
+logging_per_interaction_step: ${eval:'int(${num_interaction_steps} / 20000)'}
 save_checkpoint_per_interaction_step: ${eval:'int(${num_interaction_steps} / 10)'}
 save_buffer_per_interaction_step: null
 max_checkpoints_to_keep: 1

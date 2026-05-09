@@ -9,6 +9,7 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 from omegaconf import OmegaConf
+from PIL import Image, ImageDraw, ImageFont
 
 from flash_rl.agents import create_agent
 from flash_rl.envs import create_vec_env
@@ -49,6 +50,42 @@ def _to_uint8(frame: np.ndarray) -> np.ndarray:
     if np.issubdtype(frame.dtype, np.floating):
         frame = np.clip(frame, 0.0, 255.0)
     return frame.astype(np.uint8)
+
+
+def _format_vector(name: str, values: np.ndarray, precision: int = 3) -> str:
+    formatted = ", ".join(f"{float(v):.{precision}f}" for v in values)
+    return f"{name}: [{formatted}]"
+
+
+def _compute_phi(agent: Any, observation: np.ndarray) -> np.ndarray:
+    obs_tensor = torch.as_tensor(observation, dtype=torch.float32, device=agent._device).unsqueeze(0)
+    with torch.no_grad():
+        phi = agent._skill_encoder(observations=obs_tensor, training=False)
+    return phi.squeeze(0).detach().cpu().numpy()
+
+
+def _compute_intrinsic_reward(current_phi: np.ndarray, next_phi: np.ndarray, skill: np.ndarray, reward_scale: float) -> float:
+    delta_phi = next_phi - current_phi
+    alignment = float(np.dot(delta_phi, skill))
+    return reward_scale * alignment
+
+
+def _overlay_text(frame: np.ndarray, lines: list[str]) -> np.ndarray:
+    image = Image.fromarray(_to_uint8(frame))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default()
+
+    left = 10
+    top = 10
+    line_height = 14
+    box_height = 10 + line_height * len(lines)
+    box_width = min(image.width - 20, max(220, max(len(line) for line in lines) * 7))
+    draw.rectangle((left - 4, top - 4, left + box_width, top + box_height), fill=(0, 0, 0, 160))
+
+    for idx, line in enumerate(lines):
+        draw.text((left, top + idx * line_height), line, fill=(255, 255, 255), font=font)
+
+    return np.asarray(image)
 
 
 def _generate_eval_skills(skill_dim: int, num_skills: int, seed: int) -> np.ndarray:
@@ -133,9 +170,21 @@ def play_and_record(args: argparse.Namespace) -> None:
         episode_truncated = []
         episode_frames = []
 
+        current_phi = _compute_phi(agent, np.asarray(observations[0]))
+
         initial_frames = _extract_frames(env.render(), num_envs=1)
         if initial_frames and initial_frames[0].size > 0:
-            episode_frames.append(_to_uint8(initial_frames[0]))
+            episode_frames.append(
+                _overlay_text(
+                    initial_frames[0],
+                    [
+                        "step: 0",
+                        _format_vector("skill", skill),
+                        _format_vector("phi", current_phi),
+                        "intrinsic_reward: 0.000",
+                    ],
+                )
+            )
 
         done = False
         episode_return = 0.0
@@ -145,10 +194,27 @@ def play_and_record(args: argparse.Namespace) -> None:
             actions = np.asarray(actions)
             next_observations, rewards, terminateds, truncateds, _ = env.step(actions)
             dones = np.logical_or(terminateds, truncateds)
+            next_phi = _compute_phi(agent, np.asarray(next_observations[0]))
+            intrinsic_reward = _compute_intrinsic_reward(
+                current_phi=current_phi,
+                next_phi=next_phi,
+                skill=skill,
+                reward_scale=float(cfg.agent.skill_reward_scale),
+            )
 
             step_frames = _extract_frames(env.render(), num_envs=1)
             if step_frames and step_frames[0].size > 0:
-                episode_frames.append(_to_uint8(step_frames[0]))
+                episode_frames.append(
+                    _overlay_text(
+                        step_frames[0],
+                        [
+                            f"step: {episode_length + 1}",
+                            _format_vector("skill", skill),
+                            _format_vector("phi", next_phi),
+                            f"intrinsic_reward: {intrinsic_reward:.3f}",
+                        ],
+                    )
+                )
 
             episode_actions.append(np.asarray(actions[0]).copy())
             episode_rewards.append(float(rewards[0]))
@@ -160,6 +226,7 @@ def play_and_record(args: argparse.Namespace) -> None:
             episode_length += 1
             done = bool(dones[0])
             prev_transition = {"next_observation": next_observations}
+            current_phi = next_phi
 
         # 保存
         traj_path = traj_dir / f"episode_skill{idx:02d}.npz"

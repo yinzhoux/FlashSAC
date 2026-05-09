@@ -39,7 +39,7 @@ critic_min_v: ${eval:'-${agent.normalized_G_max}'}
 critic_max_v: ${eval:'${agent.normalized_G_max}'}
 critic_target_update_tau: 0.005
 
-temp_initial_value: 0.01
+temp_initial_value: 0.3
 temp_target_sigma: 0.15
 temp_target_entropy: null
 
