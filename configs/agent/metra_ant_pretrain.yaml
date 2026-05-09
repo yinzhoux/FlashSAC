@@ -1,5 +1,5 @@
 ##################################################################################
-# METRA
+# METRA Ant Unsupervised Pretraining
 ##################################################################################
 
 agent_type: 'metra'
@@ -8,9 +8,9 @@ seed: ${seed}
 device_type: 'cuda'
 
 buffer_max_length: 1_000_000
-buffer_min_length: 10_000
-buffer_device_type: 'cuda'
-sample_batch_size: 2048
+buffer_min_length: 2_000
+buffer_device_type: 'cpu'
+sample_batch_size: 256
 
 normalize_reward: false
 normalized_G_max: 5.0
@@ -46,16 +46,16 @@ temp_target_entropy: null
 gamma: ${gamma}
 n_step: ${n_step}
 
-skill_dim: 4
+skill_dim: 2
 skill_encoder_hidden_dim: 1024
 skill_encoder_num_layers: 2
 skill_reward_scale: 1.0
 constraint_epsilon: 1e-3
 dual_lambda_initial_value: 30.0
 
-use_compile: true
+use_compile: false
 compile_mode: 'auto'
-use_amp: true
+use_amp: false
 
 load_optimizer: true
 load_reward_normalizer: false

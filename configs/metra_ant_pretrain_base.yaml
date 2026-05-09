@@ -1,0 +1,52 @@
+##################################################################################
+# METRA Ant Unsupervised Pretraining
+##################################################################################
+
+project_name: 'FlashRL'
+entity_name: 'draftrec'
+group_name: 'metra_ant_pretrain'
+exp_name: 'ant_skill_pretrain'
+seed: 0
+
+logger_type: 'tensorboard'
+save_path: 'models/${group_name}/${exp_name}/${env.env_name}/seed${seed}-TIMESTAMP'
+agent_load_path: null
+buffer_load_path: null
+
+##################################################################################
+# Environment
+##################################################################################
+
+num_env_steps: 1_000_000
+num_train_envs: 8
+num_eval_envs: 1
+num_record_envs: 1
+
+num_eval_episodes: 1
+num_record_episodes: 0
+
+##################################################################################
+# Training
+##################################################################################
+
+gamma: 0.99
+n_step: 1
+
+num_interaction_steps: ${eval:'${num_env_steps} / (${num_train_envs})'}
+updates_per_interaction_step: 0.05
+num_update_steps: ${eval:'${num_interaction_steps} * (${updates_per_interaction_step})'}
+
+evaluation_per_interaction_step: ${eval:'int(${num_interaction_steps} / 20)'}
+metrics_per_interaction_step: ${eval:'int(${num_interaction_steps} / 20)'}
+recording_per_interaction_step: null
+logging_per_interaction_step: ${eval:'int(${num_interaction_steps} / 200)'}
+save_checkpoint_per_interaction_step: ${eval:'int(${num_interaction_steps} / 10)'}
+save_buffer_per_interaction_step: null
+
+defaults:
+- agent: metra_ant_pretrain
+- env: mujoco
+- _self_
+
+env:
+  env_name: 'Ant-v4'
