@@ -1,6 +1,7 @@
 from .agent import *
 from .agent import _sample_flashsac_actions
 from .network import SkillEncoder
+from flash_rl.buffers.metra_buffer import METRATorchBuffer
 
 class METRAConfig(FlashSACConfig):
     pass
@@ -199,6 +200,19 @@ class METRAAgent(FlashSACAgent):
         self._eval_skills: Optional[torch.Tensor] = None
         self._train_skill_resample_steps: Optional[torch.Tensor] = None
 
+        # Use Metra buffer
+        self._replay_buffer = METRATorchBuffer(
+            observation_space=observation_space,
+            action_space=action_space,
+            n_step=self._cfg.n_step,
+            gamma=self._cfg.gamma,
+            max_length=self._cfg.buffer_max_length,
+            min_length=self._cfg.buffer_min_length,
+            sample_batch_size=self._cfg.sample_batch_size,
+            device_type=self._cfg.buffer_device_type,
+            skill_dim=self._skill_dim,
+        )
+
     def _sample_skills(self, num_envs: int) -> torch.Tensor:
         """
         Sample skill vector from unit circle.
@@ -259,3 +273,25 @@ class METRAAgent(FlashSACAgent):
             )
 
         return actions.cpu().numpy()
+
+    def process_transition(self, transition: MutableMapping[str, Tensor]) -> None:
+        observations = torch.as_tensor(transition["observation"], dtype=torch.float32, device=self._device)
+        num_envs = observations.shape[0]
+        skills = self._ensure_rollout_skill_state(num_envs, training=True)
+        if self._train_skill_resample_steps is None or self._train_skill_resample_steps.shape[0] != num_envs:
+            self._train_skill_resample_steps = torch.zeros(num_envs, dtype=torch.int64, device=self._device)
+        assert self._train_skill_resample_steps is not None
+
+        replay_transition = dict(transition)
+        replay_transition["skill"] = skills.detach().cpu().numpy()
+        replay_transition["skill_resample_step"] = self._train_skill_resample_steps.detach().cpu().numpy()
+        self._replay_buffer.add(replay_transition)
+
+        terminated = torch.as_tensor(transition["terminated"], dtype=torch.bool, device=self._device)
+        truncated = torch.as_tensor(transition["truncated"], dtype=torch.bool, device=self._device)
+        done = terminated | truncated
+
+        self._train_skill_resample_steps += 1
+        if torch.any(done):
+            skills[done] = self._sample_skills(int(done.sum().item()))
+            self._train_skill_resample_steps[done] = 0
