@@ -23,7 +23,7 @@ def _compute_metra_intrinsic_reward(
     delta_features = next_features - current_features
     alignment = torch.sum(delta_features * skills, dim=-1)
     intrinsic_reward = reward_scale * alignment
-    squared_distance = torch.sum(torch.square(current_features - next_features), dim=-1)
+    squared_distance = torch.linalg.vector_norm(current_features - next_features, ord=2, dim=-1)
     return intrinsic_reward, alignment, squared_distance
 
 
