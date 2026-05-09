@@ -9,6 +9,7 @@ os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false intra_op_paralleli
 
 import argparse
 import random
+import shutil
 import sys
 from datetime import datetime
 from typing import Optional
@@ -24,6 +25,27 @@ from flash_rl.common import create_logger
 from flash_rl.envs import create_envs
 from flash_rl.evaluation import evaluate, record_video
 from flash_rl.types import Tensor
+
+
+def _prune_old_checkpoints(save_path_base: str, max_checkpoints_to_keep: Optional[int]) -> None:
+    if max_checkpoints_to_keep is None or max_checkpoints_to_keep <= 0:
+        return
+
+    checkpoint_dirs: list[tuple[int, str]] = []
+    if not os.path.isdir(save_path_base):
+        return
+
+    for name in os.listdir(save_path_base):
+        if not name.startswith("step"):
+            continue
+        step_str = name[4:]
+        if not step_str.isdigit():
+            continue
+        checkpoint_dirs.append((int(step_str), os.path.join(save_path_base, name)))
+
+    checkpoint_dirs.sort(key=lambda item: item[0], reverse=True)
+    for _, path in checkpoint_dirs[max_checkpoints_to_keep:]:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def run(args: argparse.Namespace) -> None:
@@ -185,6 +207,7 @@ def run(args: argparse.Namespace) -> None:
             ):
                 save_path = os.path.join(save_path_base, f"step{interaction_step}")
                 agent.save(save_path)
+                _prune_old_checkpoints(save_path_base, getattr(cfg, "max_checkpoints_to_keep", None))
 
             # save buffer
             if cfg.save_buffer_per_interaction_step and interaction_step % cfg.save_buffer_per_interaction_step == 0:

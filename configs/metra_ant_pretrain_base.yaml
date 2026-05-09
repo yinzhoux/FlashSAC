@@ -17,7 +17,7 @@ buffer_load_path: null
 # Environment
 ##################################################################################
 
-num_env_steps: 1_000_000
+num_env_steps: 1_000_000_00
 num_train_envs: 8
 num_eval_envs: 1
 num_record_envs: 1
@@ -42,6 +42,7 @@ recording_per_interaction_step: null
 logging_per_interaction_step: ${eval:'int(${num_interaction_steps} / 200)'}
 save_checkpoint_per_interaction_step: ${eval:'int(${num_interaction_steps} / 10)'}
 save_buffer_per_interaction_step: null
+max_checkpoints_to_keep: 1
 
 defaults:
 - agent: metra_ant_pretrain
