@@ -13,28 +13,34 @@ def _compute_metra_intrinsic_reward(
     next_features: torch.Tensor,
     skills: torch.Tensor,
     reward_scale: float,
-    normalize_delta: bool,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     delta_features = next_features - current_features
-    reward_features = delta_features
-    if normalize_delta:
-        reward_features = torch.nn.functional.normalize(reward_features, dim=-1, eps=1e-8)
+    alignment = torch.sum(delta_features * skills, dim=-1)
+    intrinsic_reward = reward_scale * alignment
+    squared_distance = torch.sum(torch.square(current_features - next_features), dim=-1)
+    return intrinsic_reward, alignment, squared_distance
 
-    intrinsic_reward = reward_scale * torch.sum(reward_features * skills, dim=-1)
-    return intrinsic_reward, delta_features
+
+def _compute_metra_constraint(
+    squared_distance: torch.Tensor,
+    epsilon: float,
+) -> torch.Tensor:
+    return torch.minimum(
+        torch.full_like(squared_distance, epsilon),
+        1.0 - squared_distance,
+    )
 
 
 def _update_metra_skill_encoder(
     skill_encoder: Network,
+    dual_lambda: Network,
     batch: dict[str, torch.Tensor],
     reward_scale: float,
-    constraint_weight: float,
-    constraint_margin: float,
-    normalize_delta: bool,
+    constraint_epsilon: float,
     device: torch.device,
     use_amp: bool,
     grad_scaler: Optional[GradScaler],
-) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
     raw_observations = batch["raw_observation"]
     raw_next_observations = batch["raw_next_observation"]
     skills = torch.nn.functional.normalize(batch["skill"], dim=-1, eps=1e-8)
@@ -47,18 +53,19 @@ def _update_metra_skill_encoder(
         current_features = current_features.clone()
         next_features = next_features.clone()
 
-        intrinsic_reward, delta_features = _compute_metra_intrinsic_reward(
+        intrinsic_reward, alignment, squared_distance = _compute_metra_intrinsic_reward(
             current_features=current_features,
             next_features=next_features,
             skills=skills,
             reward_scale=reward_scale,
-            normalize_delta=normalize_delta,
         )
-        delta_norm = torch.linalg.vector_norm(delta_features, dim=-1)
-        constraint_violation = torch.relu(delta_norm - constraint_margin)
-        constraint_loss = torch.square(constraint_violation).mean()
-        alignment_loss = -intrinsic_reward.mean()
-        skill_encoder_loss = alignment_loss + constraint_weight * constraint_loss
+        constraint_term = _compute_metra_constraint(
+            squared_distance=squared_distance,
+            epsilon=constraint_epsilon,
+        )
+        lambda_value = dual_lambda().detach()
+        skill_encoder_objective = alignment + lambda_value * constraint_term
+        skill_encoder_loss = -skill_encoder_objective.mean()
 
     assert skill_encoder.optimizer is not None
     skill_encoder.optimizer.zero_grad(set_to_none=True)
@@ -77,13 +84,41 @@ def _update_metra_skill_encoder(
 
     update_info = {
         "loss": skill_encoder_loss,
-        "alignment_loss": alignment_loss,
-        "constraint_loss": constraint_loss,
+        "mean_objective": skill_encoder_objective.mean(),
+        "mean_alignment": alignment.mean(),
+        "mean_constraint": constraint_term.mean(),
         "mean_intrinsic_reward": intrinsic_reward.mean(),
-        "mean_delta_norm": delta_norm.mean(),
+        "mean_squared_distance": squared_distance.mean(),
+        "lambda": lambda_value.mean(),
     }
     update_info = {f"skill_encoder/{key}": value for key, value in update_info.items()}
-    return update_info, intrinsic_reward.detach()
+    return update_info, intrinsic_reward.detach(), constraint_term.detach()
+
+
+def _update_metra_dual_lambda(
+    dual_lambda: Network,
+    constraint_term: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    with torch.no_grad():
+        constraint_term = constraint_term.detach()
+
+    lambda_value = dual_lambda()
+    dual_lambda_loss = (lambda_value * constraint_term).mean()
+
+    assert dual_lambda.optimizer is not None
+    dual_lambda.optimizer.zero_grad(set_to_none=True)
+    dual_lambda_loss.backward()
+    dual_lambda.optimizer.step()
+
+    if dual_lambda.scheduler is not None:
+        dual_lambda.scheduler.step()
+
+    updated_lambda = dual_lambda().detach()
+    return {
+        "dual_lambda/loss": dual_lambda_loss.detach(),
+        "dual_lambda/value": updated_lambda,
+        "dual_lambda/mean_constraint": constraint_term.mean(),
+    }
 
 
 def _init_metra_networks(
@@ -95,7 +130,7 @@ def _init_metra_networks(
     skill_encoder_num_layers: int,
     cfg: FlashSACConfig,
     device: torch.device,
-) -> tuple[Network, Network, Network, Network, Network]:
+) -> tuple[Network, Network, Network, Network, Network, Network]:
     # Create learning rate schedule
     warmup_cosine_decay_lr = warmup_cosine_decay_scheduler(
         init_value=cfg.learning_rate_init,
@@ -224,13 +259,33 @@ def _init_metra_networks(
         use_weight_normalization=True,
     )
 
+    dual_lambda_initial_value = float(getattr(cfg, "dual_lambda_initial_value", getattr(cfg, "constraint_weight", 1.0)))
+    dual_lambda_net = FlashSACTemperature(dual_lambda_initial_value).to(device)
+    dual_lambda_optimizer = optim.Adam(
+        dual_lambda_net.parameters(),
+        lr=cfg.learning_rate_peak,
+        fused=use_fused,
+    )
+    dual_lambda_scheduler = torch.optim.lr_scheduler.LambdaLR(
+        dual_lambda_optimizer,
+        lr_lambda=lambda step: warmup_cosine_decay_lr(step) / cfg.learning_rate_peak,
+    )
+    dual_lambda = Network(
+        network=dual_lambda_net,
+        optimizer=dual_lambda_optimizer,
+        scheduler=dual_lambda_scheduler,
+        compile_network=cfg.use_compile,
+        compile_mode=cfg.compile_mode,
+        use_weight_normalization=False,
+    )
+
     # normalize network parameters after initialization
     actor.normalize_parameters()
     critic.normalize_parameters()
     target_critic.normalize_parameters()
     skill_encoder.normalize_parameters()
 
-    return actor, critic, target_critic, temperature, skill_encoder
+    return actor, critic, target_critic, temperature, skill_encoder, dual_lambda
 
 class METRAAgent(FlashSACAgent):
     def __init__(
@@ -262,6 +317,7 @@ class METRAAgent(FlashSACAgent):
             self._target_critic,
             self._temperature,
             self._skill_encoder,
+            self._dual_lambda,
         ) = _init_metra_networks(
             actor_observation_dim=self._raw_actor_observation_dim,
             critic_observation_dim=self._raw_critic_observation_dim,
@@ -395,16 +451,19 @@ class METRAAgent(FlashSACAgent):
         raw_observations = batch["raw_observation"]
         raw_next_observations = batch["raw_next_observation"]
 
-        skill_encoder_info, intrinsic_reward = _update_metra_skill_encoder(
+        skill_encoder_info, intrinsic_reward, constraint_term = _update_metra_skill_encoder(
             skill_encoder=self._skill_encoder,
+            dual_lambda=self._dual_lambda,
             batch=batch,
             reward_scale=float(getattr(self._cfg, "skill_reward_scale", 1.0)),
-            constraint_weight=float(getattr(self._cfg, "constraint_weight", 0.0)),
-            constraint_margin=float(getattr(self._cfg, "constraint_margin", 1.0)),
-            normalize_delta=bool(getattr(self._cfg, "use_skill_normalization", True)),
+            constraint_epsilon=float(getattr(self._cfg, "constraint_epsilon", getattr(self._cfg, "constraint_margin", 1.0))),
             device=self._device,
             use_amp=self._cfg.use_amp,
             grad_scaler=self._grad_scaler,
+        )
+        dual_lambda_info = _update_metra_dual_lambda(
+            dual_lambda=self._dual_lambda,
+            constraint_term=constraint_term,
         )
 
         batch["reward"] = intrinsic_reward
@@ -439,6 +498,11 @@ class METRAAgent(FlashSACAgent):
                 update_info[key] = value.item()
             elif not isinstance(value, dict):
                 update_info[key] = float(value)
+        for key, value in dual_lambda_info.items():
+            if isinstance(value, torch.Tensor):
+                update_info[key] = value.item()
+            elif not isinstance(value, dict):
+                update_info[key] = float(value)
         for key, value in _update_info.items():
             if isinstance(value, torch.Tensor):
                 update_info[key] = value.item()
@@ -446,3 +510,14 @@ class METRAAgent(FlashSACAgent):
                 update_info[key] = float(value)
 
         return update_info
+
+    def save(self, path: str) -> None:
+        super().save(path)
+        self._skill_encoder.save(os.path.join(path, "skill_encoder.pt"))
+        self._dual_lambda.save(os.path.join(path, "dual_lambda.pt"))
+
+    def load(self, path: str) -> None:
+        super().load(path)
+        load_optimizer = self._cfg.load_optimizer
+        self._skill_encoder.load(os.path.join(path, "skill_encoder.pt"), load_optimizer=load_optimizer)
+        self._dual_lambda.load(os.path.join(path, "dual_lambda.pt"), load_optimizer=load_optimizer)
