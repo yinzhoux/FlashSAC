@@ -49,8 +49,10 @@ n_step: ${n_step}
 skill_dim: 4
 skill_encoder_hidden_dim: 1024
 skill_encoder_num_layers: 2
+skill_encoder_learning_rate: ${agent.learning_rate_peak}
 skill_reward_scale: 1.0
 constraint_epsilon: 1e-3
+dual_lambda_learning_rate: ${agent.learning_rate_peak}
 dual_lambda_initial_value: 30.0
 
 use_compile: true
