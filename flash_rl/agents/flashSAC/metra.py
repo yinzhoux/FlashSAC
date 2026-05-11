@@ -9,8 +9,10 @@ class METRAConfig(FlashSACConfig):
     skill_dim: int
     skill_encoder_hidden_dim: int
     skill_encoder_num_layers: int
+    skill_encoder_learning_rate: float
     skill_reward_scale: float
     constraint_epsilon: float
+    dual_lambda_learning_rate: float
     dual_lambda_initial_value: float
 
 
@@ -23,7 +25,7 @@ def _compute_metra_intrinsic_reward(
     delta_features = next_features - current_features
     alignment = torch.sum(delta_features * skills, dim=-1)
     intrinsic_reward = reward_scale * alignment
-    squared_distance = torch.linalg.vector_norm(current_features - next_features, ord=2, dim=-1)
+    squared_distance = (delta_features**2).sum(dim=-1)
     return intrinsic_reward, alignment, squared_distance
 
 
@@ -249,7 +251,7 @@ def _init_metra_networks(
     ).to(device)
     skill_encoder_optimizer = optim.Adam(
         skill_encoder_net.parameters(),
-        lr=cfg.learning_rate_peak,
+        lr=cfg.skill_encoder_learning_rate,
         fused=use_fused,
     )
     skill_encoder_scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -268,7 +270,7 @@ def _init_metra_networks(
     dual_lambda_net = FlashSACTemperature(cfg.dual_lambda_initial_value).to(device)
     dual_lambda_optimizer = optim.Adam(
         dual_lambda_net.parameters(),
-        lr=cfg.learning_rate_peak,
+        lr=cfg.dual_lambda_learning_rate,
         fused=use_fused,
     )
     dual_lambda_scheduler = torch.optim.lr_scheduler.LambdaLR(
