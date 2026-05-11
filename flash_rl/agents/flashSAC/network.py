@@ -3,6 +3,8 @@ import math
 import torch
 import torch.nn as nn
 
+from flash_rl.agents.flashSAC.encoder import GaussianSkillEncoder
+
 from flash_rl.agents.flashSAC.layer import (
     EnsembleCategoricalValue,
     EnsembleFlashSACBlock,
@@ -11,7 +13,6 @@ from flash_rl.agents.flashSAC.layer import (
     FlashSACBlock,
     FlashSACEmbedder,
     NormalTanhPolicy,
-    SkillEncoderBlock,
     UnitRMSNorm,
 )
 
@@ -116,28 +117,41 @@ class FlashSACTemperature(nn.Module):
 
 
 class MetraEncoder(nn.Module):
-    """Encode observations into a normalized skill embedding."""
+    """Encode observations with a Gaussian skill encoder.
+
+    For backward compatibility, ``forward`` returns the distribution mean so the
+    existing METRA update code can keep treating the encoder output as a tensor.
+    Use ``forward_dist`` if you need the full Gaussian distribution object.
+    """
+
     def __init__(
-            self,
-            obs_dim: int,
-            skill_dim: int,
-            hidden_dim: int,
-            num_layers: int,
-        ):
+        self,
+        obs_dim: int,
+        skill_dim: int,
+        hidden_dim: int,
+        num_layers: int,
+    ):
         super().__init__()
-        self.encoder = SkillEncoderBlock(
-            skill_dim=skill_dim,
+        self.encoder = GaussianSkillEncoder(
             obs_dim=obs_dim,
+            skill_dim=skill_dim,
             hidden_dim=hidden_dim,
-            hidden_layers=num_layers,
+            num_layers=num_layers,
         )
+
+    def forward_dist(
+        self,
+        observations: torch.Tensor,
+        training: bool,
+    ):
+        return self.encoder(observations, training=training)
 
     def forward(
         self,
         observations: torch.Tensor,
         training: bool,
     ) -> torch.Tensor:
-        return self.encoder(observations, training=training)
+        return self.forward_dist(observations, training=training).mean
 
 
 class SkillEncoder(MetraEncoder):
