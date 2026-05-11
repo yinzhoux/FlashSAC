@@ -314,4 +314,5 @@ class SkillEncoderBlock(nn.Module):
             x = block(x, training=training)
         x = self.post_norm(x)
         x = self.output_layer(x)
-        return F.normalize(x, dim=-1, eps=1e-8)
+        # return F.normalize(x, dim=-1, eps=1e-8)
+        return x
