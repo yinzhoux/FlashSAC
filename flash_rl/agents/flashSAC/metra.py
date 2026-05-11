@@ -25,7 +25,7 @@ def _compute_metra_intrinsic_reward(
     delta_features = next_features - current_features
     alignment = torch.sum(delta_features * skills, dim=-1)
     intrinsic_reward = reward_scale * alignment
-    squared_distance = (delta_features**2).sum(dim=-1)
+    squared_distance = (delta_features**2).mean(dim=-1)
     return intrinsic_reward, alignment, squared_distance
 
 
@@ -493,7 +493,18 @@ class METRAAgent(FlashSACAgent):
             constraint_term=constraint_term,
         )
 
-        batch["reward"] = intrinsic_reward
+        with torch.no_grad():
+            updated_skills = torch.nn.functional.normalize(skills, dim=-1, eps=1e-8)
+            updated_current_features = self._skill_encoder(observations=raw_observations, training=False)
+            updated_next_features = self._skill_encoder(observations=raw_next_observations, training=False)
+            updated_intrinsic_reward, _, _ = _compute_metra_intrinsic_reward(
+                current_features=updated_current_features,
+                next_features=updated_next_features,
+                skills=updated_skills,
+                reward_scale=self._cfg.skill_reward_scale,
+            )
+
+        batch["reward"] = updated_intrinsic_reward
         batch["observation"] = self._augment_critic_observations(raw_observations, skills)
         batch["next_observation"] = self._augment_critic_observations(raw_next_observations, skills)
         batch["actor_observation"] = self._augment_actor_observations(raw_observations, skills)
