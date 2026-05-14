@@ -51,6 +51,7 @@ use_amp: true
 load_optimizer: true
 load_reward_normalizer: false
 
+encoder_type: 'flash'
 skill_dim: 2
 skill_encoder_hidden_dim: 1024
 skill_encoder_num_layers: 2

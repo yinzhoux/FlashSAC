@@ -15,6 +15,7 @@ from flash_rl.agents.metra.layer import (
     UnitRMSNorm,
 )
 
+from .garage import get_state_encoder
 
 class FlashSACActor(nn.Module):
     def __init__(
@@ -114,7 +115,6 @@ class FlashSACTemperature(nn.Module):
     def forward(self) -> torch.Tensor:
         return torch.exp(self.log_temp)
 
-
 class MetraEncoder(nn.Module):
     """Encode observations into a normalized skill embedding."""
     def __init__(
@@ -139,8 +139,37 @@ class MetraEncoder(nn.Module):
     ) -> torch.Tensor:
         return self.encoder(observations, training=training)
 
+class MetraGaussianEncoder(nn.Module):
+    def __init__(self,
+                input_dim,
+                output_dim,
+                hidden_sizes,
+                hidden_nonlinearity=torch.relu,
+                w_init=torch.nn.init.xavier_uniform_,
+                init_std=1.0,
+                min_std=1e-6,
+                max_std=None,
+                spectral_normalization=False):
+        super().__init__()
+        self.encoder = get_state_encoder(
+            input_dim=input_dim,
+            output_dim=output_dim,
+            hidden_sizes=hidden_sizes,
+            hidden_nonlinearity=hidden_nonlinearity,
+            w_init=w_init,
+            init_std=init_std,
+            min_std=min_std,
+            max_std=max_std,
+            spectral_normalization=spectral_normalization   
+        )
+
+    def forward(self, observations: torch.Tensor, training: bool):
+        return self.encoder(observations).mean
 
 class SkillEncoder(MetraEncoder):
     """Backward-compatible alias for the METRA observation-to-skill encoder."""
 
+    pass
+
+class SkillGEncoder(MetraGaussianEncoder):
     pass

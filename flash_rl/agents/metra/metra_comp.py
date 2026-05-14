@@ -1,6 +1,6 @@
 import torch
 from .agent import METRAConfig
-from .network import SkillEncoder
+from .network import SkillEncoder, SkillGEncoder
 from flash_rl.agents.utils.network import Network
 import torch.optim as optim
 from flash_rl.agents.metra.network import (
@@ -8,6 +8,7 @@ from flash_rl.agents.metra.network import (
     FlashSACDoubleCritic,
     FlashSACTemperature
 )
+from flash_rl.agents.metra.garage import get_state_encoder
 
 def compute_metra_intrinsic_reward(
     current_features: torch.Tensor,
@@ -45,7 +46,6 @@ def compute_metra_reward(
     )
 
     return alignment + constraint_term * lambda_value
-
 
 def init_metra_networks(
     actor_observation_dim: int,
@@ -149,12 +149,20 @@ def init_metra_networks(
         use_weight_normalization=False,
     )
 
-    skill_encoder_net = SkillEncoder(
-        obs_dim=actor_observation_dim - skill_dim,
-        skill_dim=skill_dim,
-        hidden_dim=skill_encoder_hidden_dim,
-        num_layers=skill_encoder_num_layers,
-    ).to(device)
+    if cfg.encoder_type == "flash":
+        skill_encoder_net = SkillEncoder(
+            obs_dim=actor_observation_dim - skill_dim,
+            skill_dim=skill_dim,
+            hidden_dim=skill_encoder_hidden_dim,
+            num_layers=skill_encoder_num_layers,
+        ).to(device)
+    elif cfg.encoder_type == "gaussian":
+        skill_encoder_net = SkillGEncoder(
+            input_dim=actor_observation_dim-skill_dim,
+            output_dim=skill_dim,
+            hidden_sizes=[skill_encoder_hidden_dim] * skill_encoder_num_layers
+        ).to(device)
+    
     skill_encoder_optimizer = optim.Adam(
         skill_encoder_net.parameters(),
         lr=cfg.skill_encoder_learning_rate,

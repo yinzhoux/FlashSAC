@@ -48,6 +48,7 @@ class METRAConfig:
     load_optimizer: bool
     load_reward_normalizer: bool
 
+    encoder_type: str
     skill_dim: int
     skill_encoder_hidden_dim: int
     skill_encoder_num_layers: int
