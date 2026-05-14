@@ -52,6 +52,7 @@ class METRAConfig:
     skill_encoder_hidden_dim: int
     skill_encoder_num_layers: int
     skill_encoder_learning_rate: float
+    skill_encoder_weight_norm: bool
 
     dual_lambda_learning_rate: float
     dual_lambda_init_value: float

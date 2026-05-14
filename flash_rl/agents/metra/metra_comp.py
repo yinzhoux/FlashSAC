@@ -169,7 +169,7 @@ def init_metra_networks(
         scheduler=skill_encoder_scheduler,
         compile_network=cfg.use_compile,
         compile_mode=cfg.compile_mode,
-        use_weight_normalization=True,
+        use_weight_normalization=cfg.skill_encoder_weight_norm,
     )
 
     dual_lambda_net = FlashSACTemperature(cfg.dual_lambda_init_value).to(device)
@@ -194,6 +194,8 @@ def init_metra_networks(
     actor.normalize_parameters()
     critic.normalize_parameters()
     target_critic.normalize_parameters()
-    skill_encoder.normalize_parameters()
+
+    if cfg.skill_encoder_weight_norm:
+        skill_encoder.normalize_parameters()
 
     return actor, critic, target_critic, temperature, skill_encoder, dual_lambda
