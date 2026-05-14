@@ -49,11 +49,11 @@ n_step: ${n_step}
 skill_dim: 2
 skill_encoder_hidden_dim: 1024
 skill_encoder_num_layers: 2
-skill_encoder_learning_rate: 1e-3
-skill_reward_scale: 3.0
-constraint_epsilon: 1e-3
+skill_encoder_learning_rate: 1e-4
+skill_reward_scale: 1.0
+constraint_epsilon: 1e-4
 dual_lambda_learning_rate: 1e-4
-dual_lambda_initial_value: 3.0
+dual_lambda_initial_value: 30.0
 
 use_compile: false
 compile_mode: 'auto'
