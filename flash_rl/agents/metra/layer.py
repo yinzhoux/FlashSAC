@@ -296,4 +296,23 @@ class EnsembleCategoricalValue(nn.Module):
         value = torch.sum(torch.exp(log_prob) * self.bin_values, dim=-1)
         info: dict[str, torch.Tensor] = {"log_prob": log_prob}
         return value, info
-    
+
+class SkillEncoderBlock(nn.Module):
+    def __init__(self, skill_dim: int, obs_dim: int, hidden_dim: int, hidden_layers: int):
+        super().__init__()
+        if hidden_layers < 1:
+            raise ValueError("hidden_layers must be >= 1")
+
+        self.embedder = FlashSACEmbedder(input_dim=obs_dim, hidden_dim=hidden_dim)
+        self.encoder = nn.ModuleList([FlashSACBlock(hidden_dim) for _ in range(hidden_layers - 1)])
+        self.post_norm = UnitRMSNorm(hidden_dim)
+        self.output_layer = UnitLinear(input_dim=hidden_dim, output_dim=skill_dim)
+
+    def forward(self, x: torch.Tensor, training: bool) -> torch.Tensor:
+        x = self.embedder(x, training=training)
+        for block in self.encoder:
+            x = block(x, training=training)
+        x = self.post_norm(x)
+        x = self.output_layer(x)
+        # return F.normalize(x, dim=-1, eps=1e-8)
+        return x

@@ -5,33 +5,30 @@
 agent_type: 'metra'
 
 seed: ${seed}
-device_type: 'cuda'
 
-buffer_max_length: 1_000_000
-buffer_min_length: 10_000
-buffer_device_type: 'cuda'
-sample_batch_size: 2048
 
 normalize_reward: false
 normalized_G_max: 5.0
 
 asymmetric_observation: false
+device_type: 'cuda'
 
-learning_rate_init: 1e-4
-learning_rate_peak: 1e-4
-learning_rate_end: 1e-4
-learning_rate_warmup_rate: 1e-6
-learning_rate_warmup_step: ${eval:'int(${agent.learning_rate_warmup_rate} * ${num_interaction_steps} * ${updates_per_interaction_step})'}
-learning_rate_decay_rate: 1.0
-learning_rate_decay_step: ${eval:'int(${agent.learning_rate_decay_rate} * ${num_interaction_steps} * ${updates_per_interaction_step})'}
+buffer_max_length: 1_000_000
+buffer_min_length: 10_000
+buffer_device_type: 'cuda'
+sample_batch_size: 256
 
+actor_learning_rate: 1e-4
 actor_num_blocks: 2
 actor_hidden_dim: 1024
 actor_bc_alpha: 0.0
+
 actor_noise_zeta_mu: 2.0
 actor_noise_zeta_max: 16
+
 actor_update_period: 2
 
+critic_learning_rate: 1e-4
 critic_num_blocks: 2
 critic_hidden_dim: 1024
 critic_num_bins: 101
@@ -42,22 +39,26 @@ critic_target_update_tau: 0.005
 temp_initial_value: 0.01
 temp_target_sigma: 0.15
 temp_target_entropy: null
+temp_learning_rate: 1e-4
 
 gamma: ${gamma}
 n_step: ${n_step}
 
-skill_dim: 4
-skill_encoder_hidden_dim: 1024
-skill_encoder_num_layers: 2
-skill_encoder_learning_rate: ${agent.learning_rate_peak}
-skill_reward_scale: 1.0
-constraint_epsilon: 1e-3
-dual_lambda_learning_rate: ${agent.learning_rate_peak}
-dual_lambda_initial_value: 30.0
-
 use_compile: true
-compile_mode: 'auto'
+compile_mode: 'max-autotune'
 use_amp: true
 
 load_optimizer: true
 load_reward_normalizer: false
+
+encoder_type: 'flash'
+skill_dim: 2
+skill_encoder_hidden_dim: 1024
+skill_encoder_num_layers: 2
+skill_encoder_learning_rate: 1e-4
+skill_encoder_weight_norm: False
+
+dual_lambda_learning_rate: 1e-4
+dual_lambda_init_value: 30.0
+
+constraint_epsilon: 1e-3
