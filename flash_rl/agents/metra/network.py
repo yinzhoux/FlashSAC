@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn as nn
 
-from flash_rl.agents.flashSAC.layer import (
+from flash_rl.agents.metra.layer import (
     EnsembleCategoricalValue,
     EnsembleFlashSACBlock,
     EnsembleFlashSACEmbedder,

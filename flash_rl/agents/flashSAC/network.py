@@ -11,7 +11,6 @@ from flash_rl.agents.flashSAC.layer import (
     FlashSACBlock,
     FlashSACEmbedder,
     NormalTanhPolicy,
-    SkillEncoderBlock,
     UnitRMSNorm,
 )
 
@@ -113,34 +112,3 @@ class FlashSACTemperature(nn.Module):
 
     def forward(self) -> torch.Tensor:
         return torch.exp(self.log_temp)
-
-
-class MetraEncoder(nn.Module):
-    """Encode observations into a normalized skill embedding."""
-    def __init__(
-            self,
-            obs_dim: int,
-            skill_dim: int,
-            hidden_dim: int,
-            num_layers: int,
-        ):
-        super().__init__()
-        self.encoder = SkillEncoderBlock(
-            skill_dim=skill_dim,
-            obs_dim=obs_dim,
-            hidden_dim=hidden_dim,
-            hidden_layers=num_layers,
-        )
-
-    def forward(
-        self,
-        observations: torch.Tensor,
-        training: bool,
-    ) -> torch.Tensor:
-        return self.encoder(observations, training=training)
-
-
-class SkillEncoder(MetraEncoder):
-    """Backward-compatible alias for the METRA observation-to-skill encoder."""
-
-    pass
