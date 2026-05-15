@@ -58,7 +58,7 @@ use_amp     : true
 load_optimizer        : true
 load_reward_normalizer: false
 
-encoder_scheduler_type : 'cosine'
+encoder_scheduler_type : 'constant'
 encoder_lr_init_value  : 1e-4
 encoder_lr_peak        : 1e-4
 encoder_lr_end_value   : 5e-5
@@ -80,12 +80,12 @@ encoder_type             : 'flash'
 skill_dim                : 2
 skill_encoder_hidden_dim : 512
 skill_encoder_num_layers : 2
-skill_encoder_weight_norm: False
+skill_encoder_weight_norm: false
 
 dual_lambda_init_value: 30.0
 
 constraint_epsilon: 1e-3
 
-use_encoder_to_update: True
+use_encoder_to_update: true
 default_skill_x: 1.0
 default_skill_y: 0.0

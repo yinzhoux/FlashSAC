@@ -6,6 +6,7 @@ import torch
 from torch.amp.grad_scaler import GradScaler
 
 from flash_rl.agents.base_agent import BaseAgent
+from flash_rl.agents.utils.reward_normalization import RewardNormalizer
 from flash_rl.types import Tensor
 
 from .metra_config import METRAConfig
@@ -90,6 +91,15 @@ class METRAAgent(BaseAgent[METRAConfig]):
 
         self._grad_scaler = GradScaler(device=self._device.type, enabled=self._cfg.use_amp)
         self._update_step = 0
+
+        self.reward_normalizer = None
+        if self._cfg.normalize_reward and not self._cfg.use_encoder_to_update:
+            self.reward_normalizer = RewardNormalizer(
+                gamma=self._cfg.gamma,
+                G_max=self._cfg.normalized_G_max,
+                load_rms=self._cfg.load_reward_normalizer,
+                device=self._device,
+            )
 
     def set_eval_skills(self, skills: Tensor, normalize: bool = True) -> None: 
         """Set fixed evaluation skills used when ``training=False`` rollouts."""
@@ -196,6 +206,14 @@ class METRAAgent(BaseAgent[METRAConfig]):
         replay_transition["skill_resample_step"] = self._train_skill_resample_steps.detach().cpu().numpy()
         self._replay_buffer.add(replay_transition)
 
+        if self._cfg.normalize_reward and not self._cfg.use_encoder_to_update:
+            assert "reward" in transition and self.reward_normalizer is not None
+            self.reward_normalizer.update_reward_stats(
+                    reward=torch.as_tensor(transition["reward"], device=self._device),
+                    terminated=torch.as_tensor(transition["terminated"], device=self._device),
+                    truncated=torch.as_tensor(transition["truncated"], device=self._device),
+            )
+
           # resample skills if done.
         terminated = torch.as_tensor(transition["terminated"], dtype=torch.bool, device=self._device)
         truncated  = torch.as_tensor(transition["truncated"], dtype=torch.bool, device=self._device)
@@ -250,6 +268,11 @@ class METRAAgent(BaseAgent[METRAConfig]):
         else:   # use env reward to update policy.
             pass
 
+        # reward normalization.
+        if self._cfg.normalize_reward:
+            assert self.reward_normalizer is not None
+            batch["reward"] = self.reward_normalizer.normalize_rewards(batch["reward"])
+
         batch["observation"]            = concat_obs_skill(raw_observations, skills)
         batch["next_observation"]       = concat_obs_skill(raw_next_observations, skills)
         batch["actor_observation"]      = concat_obs_skill(raw_observations, skills)
@@ -298,12 +321,16 @@ class METRAAgent(BaseAgent[METRAConfig]):
         super().save(path)
         self._skill_encoder.save(os.path.join(path, "skill_encoder.pt"))
         self._dual_lambda.save(os.path.join(path, "dual_lambda.pt"))
+        if self.reward_normalizer is not None:
+            self.reward_normalizer.save(os.path.join(path, "reward_normalizer.pt"))
 
     def load(self, path: str) -> None: 
         super().load(path)
         load_optimizer = self._cfg.load_optimizer
         self._skill_encoder.load(os.path.join(path, "skill_encoder.pt"), load_optimizer=load_optimizer)
         self._dual_lambda.load(os.path.join(path, "dual_lambda.pt"), load_optimizer=load_optimizer)
+        if self._cfg.load_reward_normalizer and self.reward_normalizer is not None:
+            self.reward_normalizer.load(os.path.join(path, "reward_normalizer.pt"))
 
     def can_start_training(self): 
         return self._replay_buffer.can_sample()
