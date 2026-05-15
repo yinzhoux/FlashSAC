@@ -19,7 +19,9 @@ class METRAConfig:
     sac_lr_init_value: float | None
     sac_lr_peak: float
     sac_lr_end_value: float | None
+    sac_lr_warmup_rate: float
     sac_lr_warmup_steps: int | None
+    sac_lr_decay_rate: float
     sac_lr_decay_steps: int | None
 
     actor_num_blocks: int
@@ -61,6 +63,8 @@ class METRAConfig:
     encoder_lr_peak: float
     encoder_lr_end_value: float | None
     encoder_lr_warmup_steps: int | None
+    encoder_lr_warmup_rate: float
+    encoder_lr_decay_rate: float
     encoder_lr_decay_steps: int | None
 
     lambda_scheduler_type: str
