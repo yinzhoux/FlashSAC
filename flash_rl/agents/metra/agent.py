@@ -93,7 +93,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
         self._update_step = 0
 
         self.reward_normalizer = None
-        if self._cfg.normalize_reward and not self._cfg.use_encoder_to_update:
+        if self._cfg.normalize_reward:
             self.reward_normalizer = RewardNormalizer(
                 gamma=self._cfg.gamma,
                 G_max=self._cfg.normalized_G_max,
@@ -206,7 +206,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
         replay_transition["skill_resample_step"] = self._train_skill_resample_steps.detach().cpu().numpy()
         self._replay_buffer.add(replay_transition)
 
-        if self._cfg.normalize_reward and not self._cfg.use_encoder_to_update:
+        if self._cfg.normalize_reward:
             assert "reward" in transition and self.reward_normalizer is not None
             self.reward_normalizer.update_reward_stats(
                     reward=torch.as_tensor(transition["reward"], device=self._device),
