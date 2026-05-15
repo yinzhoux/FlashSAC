@@ -17,7 +17,7 @@ buffer_load_path: null
 # Environment
 ##################################################################################
 
-num_env_steps: 1_000_000
+num_env_steps: 2_000_000
 num_train_envs: 8
 num_eval_envs: 1
 num_record_envs: 1

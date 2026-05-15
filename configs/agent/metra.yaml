@@ -53,7 +53,7 @@ load_reward_normalizer: false
 
 encoder_type: 'flash'
 skill_dim: 2
-skill_encoder_hidden_dim: 1024
+skill_encoder_hidden_dim: 512
 skill_encoder_num_layers: 2
 skill_encoder_learning_rate: 1e-4
 skill_encoder_weight_norm: False
@@ -62,3 +62,5 @@ dual_lambda_learning_rate: 1e-4
 dual_lambda_init_value: 30.0
 
 constraint_epsilon: 1e-3
+
+use_encoder_to_update: True

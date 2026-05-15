@@ -59,3 +59,5 @@ class METRAConfig:
     dual_lambda_init_value: float
     
     constraint_epsilon: float
+
+    use_encoder_to_update: bool

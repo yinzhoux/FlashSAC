@@ -18,7 +18,6 @@ from .update import (
     update_policy
 )
 
-
 from .metra_comp import compute_metra_reward
 
 class METRAAgent(BaseAgent[METRAConfig]):
@@ -224,7 +223,11 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 lambda_value=self._dual_lambda().detach().clone()
             )
 
-        batch["reward"] = updated_intrinsic_reward
+        if self._cfg.use_encoder_to_update:
+            batch["reward"] = updated_intrinsic_reward
+        else: # use env reward to update policy.
+            pass
+
         batch["observation"] = concat_obs_skill(raw_observations, skills)
         batch["next_observation"] = concat_obs_skill(raw_next_observations, skills)
         batch["actor_observation"] = concat_obs_skill(raw_observations, skills)
@@ -263,7 +266,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 update_info[key] = value.item()
             elif not isinstance(value, dict):
                 update_info[key] = float(value)
-
+        update_info['env/reward'] = float(torch.mean(batch["reward"]).item())
         return update_info
 
     def save(self, path: str) -> None:
