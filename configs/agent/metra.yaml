@@ -87,3 +87,5 @@ dual_lambda_init_value: 30.0
 constraint_epsilon: 1e-3
 
 use_encoder_to_update: True
+default_skill_x: 1.0
+default_skill_y: 0.0

@@ -262,15 +262,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_path", type=str, required=True)
     parser.add_argument("--num_envs", type=int, default=1)
     parser.add_argument("--num_episodes", type=int, default=10)
-    # skill参数已废弃
-    # parser.add_argument(
-    #     "--skill",
-    #     type=float,
-    #     nargs="+",
-    #     required=True,
-    #     help="Skill values. Provide skill_dim values for broadcast, or num_envs*skill_dim for per-env skills.",
-    # )
-    # parser.add_argument("--no_normalize_skill", action="store_true")
     parser.add_argument("--output_dir", type=str, default="./play_records")
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--video_fps", type=int, default=30)

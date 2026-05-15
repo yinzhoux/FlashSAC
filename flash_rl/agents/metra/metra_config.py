@@ -84,3 +84,5 @@ class METRAConfig     :
     constraint_epsilon    : float
 
     use_encoder_to_update: bool
+    default_skill_x: float
+    default_skill_y: float

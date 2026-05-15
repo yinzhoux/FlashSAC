@@ -62,7 +62,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
 
           # Rollout-time skill state. These are initialized lazily once the number
           # of vectorized environments is known. (Runtime state)
-        self._train_skills              :               Optional[torch.Tensor]  = None
+        self._train_skills              :                Optional[torch.Tensor] = None
         self._eval_skills               :                Optional[torch.Tensor] = None
         self._train_skill_resample_steps: Optional[torch.Tensor]                = None
 
@@ -118,6 +118,28 @@ class METRAAgent(BaseAgent[METRAConfig]):
         """
         skill states initializer.
         """
+        if self._cfg.use_encoder_to_update == False:
+            if self._skill_dim != 2:
+                raise ValueError(
+                    f"Default fixed skill only supports skill_dim=2, got {self._skill_dim}"
+                )
+
+            fixed_skill = torch.tensor(
+                [self._cfg.default_skill_x, self._cfg.default_skill_y],
+                dtype=torch.float32,
+                device=self._device,
+            )
+            fixed_skill = torch.nn.functional.normalize(fixed_skill, dim=0, eps=1e-8)
+            fixed_skills = fixed_skill.unsqueeze(0).expand(num_envs, -1).clone()
+
+            if training and (
+                self._train_skill_resample_steps is None
+                or self._train_skill_resample_steps.shape[0] != num_envs
+            ):
+                self._train_skill_resample_steps = torch.zeros(num_envs, dtype=torch.int64, device=self._device)
+
+            return fixed_skills
+
         if training: 
             if self._train_skills is None or self._train_skills.shape[0] != num_envs: 
                 self._train_skills               = sample_skills(num_envs, self._skill_dim, self._device)
@@ -223,7 +245,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 lambda_value     = self._dual_lambda().detach().clone()
             )
 
-        if self._cfg.use_encoder_to_update: 
+        if self._cfg.use_encoder_to_update:
             batch["reward"] = updated_intrinsic_reward
         else:   # use env reward to update policy.
             pass

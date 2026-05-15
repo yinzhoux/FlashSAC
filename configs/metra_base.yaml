@@ -54,11 +54,11 @@ save_checkpoint_per_interaction_step: ${eval:'max(1, int(${save_checkpoint_inter
 save_buffer_per_interaction_step    : null
 max_checkpoints_to_keep             : 2
 
-  defaults: 
-- agent   : metra
-- env     : mujoco
+defaults:
+- agent: metra
+- env: mujoco
 - _self_
 
-env     : 
-env_name: 'Ant-v4'
-      # env_name: 'HalfCheetah-v4'
+env:
+  env_name: 'Ant-v4'
+  # env_name: 'HalfCheetah-v4'
