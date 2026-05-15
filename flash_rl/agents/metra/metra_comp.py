@@ -9,7 +9,7 @@ from flash_rl.agents.metra.network import (
     FlashSACTemperature
 )
 from flash_rl.agents.metra.garage import get_state_encoder
-
+from flash_rl.agents.utils.scheduler import warmup_cosine_decay_scheduler
 def compute_metra_intrinsic_reward(
     current_features: torch.Tensor,
     next_features: torch.Tensor,
@@ -19,7 +19,6 @@ def compute_metra_intrinsic_reward(
     alignment = torch.sum(delta_features * skills, dim=-1)
     squared_distance = (delta_features**2).mean(dim=-1)
     return alignment, squared_distance
-
 
 def compute_metra_constraint(
     squared_distance: torch.Tensor,
@@ -57,7 +56,7 @@ def init_metra_networks(
     cfg: METRAConfig,
     device: torch.device,
 ) -> tuple[Network, Network, Network, Network, Network, Network]:
-    # Initialize actor
+    # ========================== Initialize actor ==========================
     actor_net = FlashSACActor(
         num_blocks=cfg.actor_num_blocks,
         input_dim=actor_observation_dim,
@@ -66,10 +65,18 @@ def init_metra_networks(
     ).to(device)
 
     use_fused = device.type == "cuda" and torch.cuda.is_available()
-    actor_optimizer = optim.Adam(actor_net.parameters(), lr=cfg.actor_learning_rate, fused=use_fused)
-    actor_scheduler = torch.optim.lr_scheduler.ConstantLR(
-        optimizer=actor_optimizer, factor=1.0
+
+    actor_optimizer, actor_scheduler = gen_optimizer(
+        parameters=actor_net.parameters(),
+        use_fused=use_fused,
+        scheduler_type=cfg.sac_scheduler_type,
+        init_value=cfg.sac_lr_init_value,
+        peak=cfg.sac_lr_peak,
+        end_value=cfg.sac_lr_end_value,
+        warmup_steps=cfg.sac_lr_warmup_steps,
+        decay_steps=cfg.sac_lr_decay_steps
     )
+
     actor = Network(
         network=actor_net,
         optimizer=actor_optimizer,
@@ -82,7 +89,7 @@ def init_metra_networks(
     if cfg.use_compile:
         actor.network.get_mean_and_std = torch.compile(actor.network.get_mean_and_std, mode=cfg.compile_mode)  # type: ignore
 
-    # Initialize critic
+    # ========================== Initialize critic ==========================
     critic_net = FlashSACDoubleCritic(
         num_blocks=cfg.critic_num_blocks,
         input_dim=critic_observation_dim + action_dim,
@@ -92,14 +99,17 @@ def init_metra_networks(
         max_v=cfg.critic_max_v,
     ).to(device)
 
-    critic_optimizer = optim.Adam(
-        critic_net.parameters(),
-        lr=cfg.critic_learning_rate,
-        fused=use_fused,
+    critic_optimizer, critic_scheduler = gen_optimizer(
+        parameters=critic_net.parameters(),
+        use_fused=use_fused,
+        scheduler_type=cfg.sac_scheduler_type,
+        init_value=cfg.sac_lr_init_value,
+        peak=cfg.sac_lr_peak,
+        end_value=cfg.sac_lr_end_value,
+        warmup_steps=cfg.sac_lr_warmup_steps,
+        decay_steps=cfg.sac_lr_decay_steps
     )
-    critic_scheduler = torch.optim.lr_scheduler.ConstantLR(
-        optimizer=critic_optimizer, factor=1.0
-    )
+    
     critic = Network(
         network=critic_net,
         optimizer=critic_optimizer,
@@ -109,7 +119,7 @@ def init_metra_networks(
         use_weight_normalization=True,
     )
 
-    # Initialize target critic (same as critic but no optimizer)
+    # ========================== Initialize target critic (same as critic but no optimizer) ==========================
     target_critic_net = FlashSACDoubleCritic(
         num_blocks=cfg.critic_num_blocks,
         input_dim=critic_observation_dim + action_dim,
@@ -130,15 +140,17 @@ def init_metra_networks(
         ema_tau=cfg.critic_target_update_tau,
     )
 
-    # Initialize temperature
+    # ========================== Initialize temperature ==========================
     temp_net = FlashSACTemperature(cfg.temp_initial_value).to(device)
-    temp_optimizer = optim.Adam(
-        temp_net.parameters(),
-        lr=cfg.temp_learning_rate,
-        fused=use_fused,
-    )
-    temp_scheduler = torch.optim.lr_scheduler.ConstantLR(
-        optimizer=temp_optimizer, factor=1.0
+    temp_optimizer, temp_scheduler = gen_optimizer(
+        parameters=temp_net.parameters(),
+        use_fused=use_fused,
+        scheduler_type=cfg.sac_scheduler_type,
+        init_value=cfg.sac_lr_init_value,
+        peak=cfg.sac_lr_peak,
+        end_value=cfg.sac_lr_end_value,
+        warmup_steps=cfg.sac_lr_warmup_steps,
+        decay_steps=cfg.sac_lr_decay_steps
     )
     temperature = Network(
         network=temp_net,
@@ -148,6 +160,8 @@ def init_metra_networks(
         compile_mode=cfg.compile_mode,
         use_weight_normalization=False,
     )
+
+    # ============================ Initialize encoder ============================
 
     if cfg.encoder_type == "flash":
         skill_encoder_net = SkillEncoder(
@@ -163,13 +177,15 @@ def init_metra_networks(
             hidden_sizes=[skill_encoder_hidden_dim] * skill_encoder_num_layers
         ).to(device)
     
-    skill_encoder_optimizer = optim.Adam(
-        skill_encoder_net.parameters(),
-        lr=cfg.skill_encoder_learning_rate,
-        fused=use_fused,
-    )
-    skill_encoder_scheduler = torch.optim.lr_scheduler.ConstantLR(
-        optimizer=skill_encoder_optimizer, factor=1.0
+    skill_encoder_optimizer, skill_encoder_scheduler = gen_optimizer(
+        parameters=skill_encoder_net.parameters(),
+        use_fused=use_fused,
+        scheduler_type=cfg.encoder_scheduler_type,
+        init_value=cfg.encoder_lr_init_value,
+        peak=cfg.encoder_lr_peak,
+        end_value=cfg.encoder_lr_end_value,
+        warmup_steps=cfg.encoder_lr_warmup_steps,
+        decay_steps=cfg.encoder_lr_decay_steps
     )
     skill_encoder = Network(
         network=skill_encoder_net,
@@ -181,13 +197,15 @@ def init_metra_networks(
     )
 
     dual_lambda_net = FlashSACTemperature(cfg.dual_lambda_init_value).to(device)
-    dual_lambda_optimizer = optim.Adam(
-        dual_lambda_net.parameters(),
-        lr=cfg.dual_lambda_learning_rate,
-        fused=use_fused,
-    )
-    dual_lambda_scheduler = torch.optim.lr_scheduler.ConstantLR(
-        optimizer=dual_lambda_optimizer, factor=1.0
+    dual_lambda_optimizer, dual_lambda_scheduler = gen_optimizer(
+        parameters=dual_lambda_net.parameters(),
+        use_fused=use_fused,
+        scheduler_type=cfg.lambda_scheduler_type,
+        init_value=cfg.lambda_lr_init_value,
+        peak=cfg.lambda_lr_peak,
+        end_value=cfg.lambda_lr_end_value,
+        warmup_steps=cfg.lambda_lr_warmup_steps,
+        decay_steps=cfg.lambda_lr_decay_steps
     )
     dual_lambda = Network(
         network=dual_lambda_net,
@@ -207,3 +225,47 @@ def init_metra_networks(
         skill_encoder.normalize_parameters()
 
     return actor, critic, target_critic, temperature, skill_encoder, dual_lambda
+
+def gen_optimizer(
+    parameters,
+    use_fused,
+
+    scheduler_type: str,
+    init_value: float | None,
+    peak: float,
+    end_value: float | None,
+    warmup_steps: int | None,
+    decay_steps: int | None
+):
+    if scheduler_type == 'cosine':
+        assert init_value != None
+        assert end_value != None
+        assert warmup_steps != None
+        assert decay_steps != None
+        scale_scheduler = warmup_cosine_decay_scheduler(
+            init_value,
+            peak,
+            end_value,
+            warmup_steps,
+            decay_steps
+        )
+        optimizer = optim.Adam(
+            params=parameters, lr=peak, fused=use_fused
+        )
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=lambda step: scale_scheduler(step) / peak
+        )
+        return optimizer, scheduler
+    
+    elif scheduler_type == "constant":
+        optimizer = optim.Adam(parameters, lr=peak, fused=use_fused)
+        
+        scheduler = torch.optim.lr_scheduler.ConstantLR(
+            optimizer=optimizer, factor=1.0
+        )
+
+        return optimizer, scheduler
+    
+    else:
+        raise NotImplementedError
