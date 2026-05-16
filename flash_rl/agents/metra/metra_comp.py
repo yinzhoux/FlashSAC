@@ -14,7 +14,7 @@ def compute_metra_intrinsic_reward(
   current_features                                  : torch.Tensor,
   next_features                                     : torch.Tensor,
   skills                                            : torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: 
+) -> tuple[torch.Tensor, torch.Tensor]: 
     delta_features   = next_features - current_features
     alignment        = torch.sum(delta_features * skills, dim=-1)
     squared_distance = (delta_features**2).mean(dim=-1)
@@ -33,18 +33,14 @@ def compute_metra_reward(
 current_features: torch.Tensor,
 next_features   : torch.Tensor,
 skills          : torch.Tensor,
-epsilon         : float,
-lambda_value    : float
+epsilon         : float | None = None,
+lambda_value    : float | None = None
 )               : 
-    alignment, squared_distance = compute_metra_intrinsic_reward(
+    del epsilon, lambda_value
+    alignment, _ = compute_metra_intrinsic_reward(
         current_features, next_features, skills
     )
-
-    constraint_term = compute_metra_constraint(
-        squared_distance, epsilon
-    )
-
-    return alignment + constraint_term * lambda_value
+    return alignment
 
 def init_metra_networks(
   actor_observation_dim                                         : int,

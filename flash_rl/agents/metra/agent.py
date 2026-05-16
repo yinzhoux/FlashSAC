@@ -252,8 +252,9 @@ class METRAAgent(BaseAgent[METRAConfig]):
         )
 
         with torch.no_grad(): 
-            updated_current_features = self._skill_encoder(observations=raw_observations, training=False)
-            updated_next_features    = self._skill_encoder(observations=raw_next_observations, training=False)
+            encoder_observations = torch.cat([raw_observations, raw_next_observations], dim=0)
+            encoder_features = self._skill_encoder(observations=encoder_observations, training=False)
+            updated_current_features, updated_next_features = torch.chunk(encoder_features, 2, dim=0)
 
             updated_intrinsic_reward = compute_metra_reward(
                 current_features = updated_current_features,

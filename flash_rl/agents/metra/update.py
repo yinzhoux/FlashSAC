@@ -336,8 +336,9 @@ def update_skill_encoder(
     skills                = batch["skill"]
 
     with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
-        current_features = skill_encoder(observations=raw_observations, training=True)
-        next_features    = skill_encoder(observations=raw_next_observations, training=True)
+        encoder_observations = torch.cat([raw_observations, raw_next_observations], dim=0)
+        encoder_features     = skill_encoder(observations=encoder_observations, training=True)
+        current_features, next_features = torch.chunk(encoder_features, 2, dim=0)
 
         # Clone compiled outputs before reuse to avoid overwritten CUDAGraph buffers.
         current_features = current_features.clone()
