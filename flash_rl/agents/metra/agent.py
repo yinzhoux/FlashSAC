@@ -137,7 +137,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
         self._eval_skills = skill_tensor.clone()
 
     def get_eval_skills(self) -> Optional[torch.Tensor]: 
-        if  self._eval_skills is None                      : 
+        if  self._eval_skills is None                  : 
             return None
         return self._eval_skills.detach().clone()
 
@@ -291,9 +291,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 current_features = updated_current_features,
                 next_features    = updated_next_features,
                 skills           = skills,
-                epsilon          = self._cfg.constraint_epsilon,
-                lambda_value     = self._dual_lambda().detach().clone(),
-                skill_type       = self._cfg.skill_type,
+                skill_type       = self._cfg.skill_type
             )
 
         if self._cfg.use_encoder_to_update:

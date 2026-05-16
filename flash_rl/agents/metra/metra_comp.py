@@ -36,12 +36,10 @@ def compute_metra_reward(
 current_features: torch.Tensor,
 next_features   : torch.Tensor,
 skills          : torch.Tensor,
-epsilon         : float | None = None,
-lambda_value    : float | None = None
+skill_type      : str = 'continuous'
 )               : 
-    del epsilon, lambda_value
     alignment, _ = compute_metra_intrinsic_reward(
-        current_features, next_features, skills
+        current_features, next_features, skills, skill_type
     )
     return alignment
 
@@ -118,7 +116,7 @@ def init_metra_networks(
         use_weight_normalization = True,
     )
 
-      # ========================== Initialize target critic (same as critic but no optimizer) ==========================
+    # ========================== Initialize target critic (same as critic but no optimizer) ==========================
     target_critic_net = FlashSACDoubleCritic(
         num_blocks = cfg.critic_num_blocks,
         input_dim  = critic_observation_dim + action_dim,
@@ -171,7 +169,7 @@ def init_metra_networks(
         ).to(device)
     elif cfg.encoder_type  == "gaussian":
          skill_encoder_net  = SkillGEncoder(
-            input_dim    = actor_observation_dim-skill_dim,
+            input_dim    = actor_observation_dim - skill_dim,
             output_dim   = skill_dim,
             hidden_sizes = [skill_encoder_hidden_dim] * skill_encoder_num_layers
         ).to(device)
@@ -220,7 +218,7 @@ def init_metra_networks(
     critic.normalize_parameters()
     target_critic.normalize_parameters()
 
-    if cfg.skill_encoder_weight_norm: 
+    if cfg.skill_encoder_weight_norm:
         skill_encoder.normalize_parameters()
 
     return actor, critic, target_critic, temperature, skill_encoder, dual_lambda
@@ -229,13 +227,13 @@ def gen_optimizer(
     parameters,
     use_fused,
 
-scheduler_type: str,
-init_value    : float | None,
-peak          : float,
-end_value     : float | None,
-warmup_steps  : int | None,
-decay_steps   : int | None
-)             : 
+    scheduler_type: str,
+    init_value    : float | None,
+    peak          : float,
+    end_value     : float | None,
+    warmup_steps  : int | None,
+    decay_steps   : int | None
+)                 : 
     if     scheduler_type  == 'cosine':
         assert init_value      != None
         assert end_value       != None
