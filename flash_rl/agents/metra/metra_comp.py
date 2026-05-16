@@ -1,7 +1,8 @@
 import torch
-from .agent import METRAConfig
+from .metra_config import METRAConfig
 from .network import SkillEncoder, SkillGEncoder
 from flash_rl.agents.utils.network import Network
+from flash_rl.agents.utils.function import build_metra_skill_masks
 import torch.optim as optim
 from flash_rl.agents.metra.network import (
     FlashSACActor,
@@ -11,12 +12,14 @@ from flash_rl.agents.metra.network import (
 from flash_rl.agents.metra.garage import get_state_encoder
 from flash_rl.agents.utils.scheduler import warmup_cosine_decay_scheduler
 def compute_metra_intrinsic_reward(
-  current_features                                  : torch.Tensor,
-  next_features                                     : torch.Tensor,
-  skills                                            : torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: 
-    delta_features   = next_features - current_features
-    alignment        = torch.sum(delta_features * skills, dim=-1)
+    current_features: torch.Tensor,
+    next_features   : torch.Tensor,
+    skills          : torch.Tensor,
+    skill_type      : str = "continuous",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    delta_features = next_features - current_features
+    skill_masks = build_metra_skill_masks(skills, skill_type=skill_type)
+    alignment = torch.sum(delta_features * skill_masks, dim=-1)
     squared_distance = (delta_features**2).mean(dim=-1)
     return alignment, squared_distance
 
@@ -34,10 +37,11 @@ current_features: torch.Tensor,
 next_features   : torch.Tensor,
 skills          : torch.Tensor,
 epsilon         : float,
-lambda_value    : float
+lambda_value    : float,
+skill_type      : str = "continuous",
 )               : 
     alignment, squared_distance = compute_metra_intrinsic_reward(
-        current_features, next_features, skills
+        current_features, next_features, skills, skill_type=skill_type
     )
 
     constraint_term = compute_metra_constraint(

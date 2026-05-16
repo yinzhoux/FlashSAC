@@ -4,7 +4,7 @@
 
 project_name: 'Metra'
 entity_name : 'draftrec'
-group_name  : 'metra'
+group_name  : 'test'
 exp_name    : 'test'
 seed        : 0
 

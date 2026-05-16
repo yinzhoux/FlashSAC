@@ -70,6 +70,20 @@ def _compute_intrinsic_reward(current_phi: np.ndarray, next_phi: np.ndarray, ski
     return reward_scale * alignment
 
 
+def _compute_discrete_skill_mask(skill: np.ndarray) -> np.ndarray:
+    skill_dim = skill.shape[-1]
+    if skill_dim <= 1:
+        raise ValueError(f"Discrete skill masks require skill_dim > 1, got {skill_dim}")
+    mean_skill = np.mean(skill, keepdims=True)
+    return (skill - mean_skill) * (skill_dim / (skill_dim - 1))
+
+
+def _format_skill(skill: np.ndarray, skill_type: str) -> str:
+    if skill_type == "discrete":
+        return f"skill_index: {int(np.argmax(skill))}"
+    return _format_vector("skill", skill)
+
+
 def _overlay_text(frame: np.ndarray, lines: list[str]) -> np.ndarray:
     image = Image.fromarray(_to_uint8(frame))
     draw = ImageDraw.Draw(image)
@@ -88,7 +102,10 @@ def _overlay_text(frame: np.ndarray, lines: list[str]) -> np.ndarray:
     return np.asarray(image)
 
 
-def _generate_eval_skills(skill_dim: int, num_skills: int, seed: int) -> np.ndarray:
+def _generate_eval_skills(skill_dim: int, num_skills: int, seed: int, skill_type: str) -> np.ndarray:
+    if skill_type == "discrete":
+        return np.eye(skill_dim, dtype=np.float32)
+
     if skill_dim == 2:
         angles = np.linspace(0, 2 * np.pi, num_skills, endpoint=False, dtype=np.float32)
         return np.stack([np.cos(angles), np.sin(angles)], axis=1)
@@ -144,11 +161,12 @@ def play_and_record(args: argparse.Namespace) -> None:
 
     # 2D skill: unit circle sweep. Higher-D skill: deterministic unit hypersphere samples.
     skill_dim = int(cfg.agent.skill_dim)
-    num_skills = 10
-    skills_list = _generate_eval_skills(skill_dim=skill_dim, num_skills=num_skills, seed=cfg.seed)
+    skill_type = str(getattr(cfg.agent, "skill_type", "continuous"))
+    num_skills = skill_dim if skill_type == "discrete" else 10
+    skills_list = _generate_eval_skills(skill_dim=skill_dim, num_skills=num_skills, seed=cfg.seed, skill_type=skill_type)
 
     for idx, skill in enumerate(skills_list):
-        agent.set_eval_skills(skill[None, :], normalize=True)
+        agent.set_eval_skills(skill[None, :], normalize=skill_type == "continuous")
 
         run_name = args.run_name or f"{cfg.env.env_name}_seed{cfg.seed}_{datetime.now().strftime('%m%d-%H%M%S')}_skill{idx:02d}"
         output_root = Path(args.output_dir) / run_name
@@ -179,7 +197,7 @@ def play_and_record(args: argparse.Namespace) -> None:
                     initial_frames[0],
                     [
                         "step: 0",
-                        _format_vector("skill", skill),
+                        _format_skill(skill, skill_type),
                         _format_vector("phi", current_phi),
                         "intrinsic_reward: 0.000",
                     ],
@@ -198,8 +216,8 @@ def play_and_record(args: argparse.Namespace) -> None:
             intrinsic_reward = _compute_intrinsic_reward(
                 current_phi=current_phi,
                 next_phi=next_phi,
-                skill=skill,
-                reward_scale=float(cfg.agent.skill_reward_scale),
+                skill=_compute_discrete_skill_mask(skill) if skill_type == "discrete" else skill,
+                reward_scale=float(getattr(cfg.agent, "skill_reward_scale", 1.0)),
             )
 
             step_frames = _extract_frames(env.render(), num_envs=1)
@@ -209,7 +227,7 @@ def play_and_record(args: argparse.Namespace) -> None:
                         step_frames[0],
                         [
                             f"step: {episode_length + 1}",
-                            _format_vector("skill", skill),
+                            _format_skill(skill, skill_type),
                             _format_vector("phi", next_phi),
                             f"intrinsic_reward: {intrinsic_reward:.3f}",
                         ],
