@@ -17,3 +17,4 @@ python tests/main.py
 --discrete 0 
 --dim_option 2
 ```
+sac_tau = 5e-3

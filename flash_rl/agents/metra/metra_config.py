@@ -75,6 +75,7 @@ class METRAConfig     :
     lambda_lr_decay_steps : int | None
 
     encoder_type             : str
+    skill_type               : str
     skill_dim                : int
     skill_encoder_hidden_dim : int
     skill_encoder_num_layers : int
@@ -86,3 +87,4 @@ class METRAConfig     :
     use_encoder_to_update: bool
     default_skill_x: float
     default_skill_y: float
+    default_skill_index: int

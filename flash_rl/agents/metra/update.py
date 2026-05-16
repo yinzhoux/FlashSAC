@@ -326,6 +326,7 @@ def update_skill_encoder(
     batch: dict[str, torch.Tensor],
     constraint_epsilon: float,
     lambda_value: float,
+    skill_type: str,
     device: torch.device,
     use_amp: bool,
     grad_scaler: Optional[GradScaler],
@@ -347,7 +348,8 @@ def update_skill_encoder(
         intrinsic_reward, squared_distance = compute_metra_intrinsic_reward(
             current_features=current_features,
             next_features=next_features,
-            skills=skills
+            skills=skills,
+            skill_type=skill_type,
         )
         constraint_term = compute_metra_constraint(
             squared_distance=squared_distance,

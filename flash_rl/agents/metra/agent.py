@@ -93,7 +93,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
         self._update_step = 0
 
         self.reward_normalizer = None
-        if self._cfg.normalize_reward and not self._cfg.use_encoder_to_update:
+        if self._cfg.normalize_reward:
             self.reward_normalizer = RewardNormalizer(
                 gamma=self._cfg.gamma,
                 G_max=self._cfg.normalized_G_max,
@@ -103,9 +103,25 @@ class METRAAgent(BaseAgent[METRAConfig]):
 
     def set_eval_skills(self, skills: Tensor, normalize: bool = True) -> None: 
         """Set fixed evaluation skills used when ``training=False`` rollouts."""
-        skill_tensor       = torch.as_tensor(skills, dtype=torch.float32, device=self._device)
-        if skill_tensor.ndim == 1:
-           skill_tensor       = skill_tensor.unsqueeze(0)
+        skill_tensor = torch.as_tensor(skills, device=self._device)
+
+        if self._cfg.skill_type == "discrete":
+            if skill_tensor.ndim == 0:
+                skill_tensor = skill_tensor.unsqueeze(0)
+            if skill_tensor.ndim == 1 and skill_tensor.shape[0] != self._skill_dim:
+                skill_tensor = torch.nn.functional.one_hot(
+                    skill_tensor.to(torch.long),
+                    num_classes=self._skill_dim,
+                ).to(torch.float32)
+            else:
+                skill_tensor = skill_tensor.to(torch.float32)
+                if skill_tensor.ndim == 1:
+                    skill_tensor = skill_tensor.unsqueeze(0)
+        else:
+            skill_tensor = skill_tensor.to(torch.float32)
+            if skill_tensor.ndim == 1:
+                skill_tensor = skill_tensor.unsqueeze(0)
+
         if skill_tensor.ndim != 2:
             raise ValueError(
                 f"Expected skills to have shape (num_envs, skill_dim) or (skill_dim,), got {tuple(skill_tensor.shape)}"
@@ -115,7 +131,8 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 f"Skill dim mismatch: expected {self._skill_dim}, got {skill_tensor.shape[-1]}"
             )
 
-        skill_tensor = torch.nn.functional.normalize(skill_tensor, dim=-1, eps=1e-8)
+        if self._cfg.skill_type == "continuous" and normalize:
+            skill_tensor = torch.nn.functional.normalize(skill_tensor, dim=-1, eps=1e-8)
         
         self._eval_skills = skill_tensor.clone()
 
@@ -129,18 +146,15 @@ class METRAAgent(BaseAgent[METRAConfig]):
         skill states initializer.
         """
         if self._cfg.use_encoder_to_update == False:
-            if self._skill_dim != 2:
-                raise ValueError(
-                    f"Default fixed skill only supports skill_dim=2, got {self._skill_dim}"
-                )
-
-            fixed_skill = torch.tensor(
-                [self._cfg.default_skill_x, self._cfg.default_skill_y],
-                dtype=torch.float32,
+            fixed_skills = build_default_skills(
+                num_envs=num_envs,
+                skill_dim=self._skill_dim,
                 device=self._device,
+                skill_type=self._cfg.skill_type,
+                default_skill_x=self._cfg.default_skill_x,
+                default_skill_y=self._cfg.default_skill_y,
+                default_skill_index=self._cfg.default_skill_index,
             )
-            fixed_skill = torch.nn.functional.normalize(fixed_skill, dim=0, eps=1e-8)
-            fixed_skills = fixed_skill.unsqueeze(0).expand(num_envs, -1).clone()
 
             if training and (
                 self._train_skill_resample_steps is None
@@ -152,13 +166,23 @@ class METRAAgent(BaseAgent[METRAConfig]):
 
         if training: 
             if self._train_skills is None or self._train_skills.shape[0] != num_envs: 
-                self._train_skills               = sample_skills(num_envs, self._skill_dim, self._device)
+                self._train_skills               = sample_skills(
+                    num_envs,
+                    self._skill_dim,
+                    self._device,
+                    skill_type=self._cfg.skill_type,
+                )
                 self._train_skill_resample_steps = torch.zeros(num_envs, dtype=torch.int64, device=self._device)
             assert self._train_skills is not None
             return self._train_skills
 
         if self._eval_skills is None or self._eval_skills.shape[0] != num_envs:
-           self._eval_skills                                        = sample_skills(num_envs, self._skill_dim, self._device)
+           self._eval_skills                                        = sample_skills(
+               num_envs,
+               self._skill_dim,
+               self._device,
+               skill_type=self._cfg.skill_type,
+           )
         return self._eval_skills
 
     def sample_actions(
@@ -219,10 +243,16 @@ class METRAAgent(BaseAgent[METRAConfig]):
         truncated  = torch.as_tensor(transition["truncated"], dtype=torch.bool, device=self._device)
         done       = terminated | truncated
 
-        self._train_skill_resample_steps += 1
-        if torch.any(done): 
-            skills[done]                           = sample_skills(int(done.sum().item()), self._skill_dim, self._device)
-            self._train_skill_resample_steps[done] = 0
+        if self._cfg.use_encoder_to_update:
+            self._train_skill_resample_steps += 1
+            if torch.any(done): 
+                skills[done] = sample_skills(
+                    int(done.sum().item()),
+                    self._skill_dim,
+                    self._device,
+                    skill_type=self._cfg.skill_type,
+                )
+                self._train_skill_resample_steps[done] = 0
 
     def update(self) -> dict[str, Any]: 
         assert self._cfg.temp_target_entropy != None
@@ -242,6 +272,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
             batch              = batch,
             constraint_epsilon = self._cfg.constraint_epsilon,
             lambda_value       = self._dual_lambda().detach().clone(),
+            skill_type         = self._cfg.skill_type,
             device             = self._device,
             use_amp            = self._cfg.use_amp,
             grad_scaler        = self._grad_scaler,
@@ -261,15 +292,19 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 next_features    = updated_next_features,
                 skills           = skills,
                 epsilon          = self._cfg.constraint_epsilon,
-                lambda_value     = self._dual_lambda().detach().clone()
+                lambda_value     = self._dual_lambda().detach().clone(),
+                skill_type       = self._cfg.skill_type,
             )
 
         if self._cfg.use_encoder_to_update:
             batch["reward"] = updated_intrinsic_reward
         else:   # use env reward to update policy.
-            if self._cfg.normalize_reward:
-                assert self.reward_normalizer is not None
-                batch["reward"] = self.reward_normalizer.normalize_rewards(batch["reward"])
+            pass
+
+        # reward normalization.
+        if self._cfg.normalize_reward:
+            assert self.reward_normalizer is not None
+            batch["reward"] = self.reward_normalizer.normalize_rewards(batch["reward"])
 
         batch["observation"]            = concat_obs_skill(raw_observations, skills)
         batch["next_observation"]       = concat_obs_skill(raw_next_observations, skills)

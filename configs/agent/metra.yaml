@@ -6,8 +6,7 @@ agent_type: 'metra'
 
 seed: ${seed}
 
-
-normalize_reward: false
+normalize_reward: true
 normalized_G_max: 5.0
 
 asymmetric_observation: false
@@ -18,7 +17,7 @@ buffer_min_length : 10_000
 buffer_device_type: 'cpu'
 sample_batch_size : 2048
 
-  # learning rate
+# learning rate
 sac_scheduler_type : 'cosine'
 sac_lr_init_value  : 3e-4
 sac_lr_peak        : 3e-4
@@ -77,8 +76,9 @@ lambda_lr_warmup_steps: null
 lambda_lr_decay_steps : null
 
 encoder_type             : 'flash'
+skill_type               : 'continuous'
 skill_dim                : 2
-skill_encoder_hidden_dim : 512
+skill_encoder_hidden_dim : 256
 skill_encoder_num_layers : 2
 skill_encoder_weight_norm: false
 
@@ -89,3 +89,4 @@ constraint_epsilon: 1e-3
 use_encoder_to_update: true
 default_skill_x: 1.0
 default_skill_y: 0.0
+default_skill_index: 0
