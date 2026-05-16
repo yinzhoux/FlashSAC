@@ -297,7 +297,11 @@ class METRAAgent(BaseAgent[METRAConfig]):
 
         if self._cfg.use_encoder_to_update:
             batch["reward"] = updated_intrinsic_reward
-        elif self._cfg.normalize_reward:
+        else:   # use env reward to update policy.
+            pass
+
+        # reward normalization.
+        if self._cfg.normalize_reward:
             assert self.reward_normalizer is not None
             batch["reward"] = self.reward_normalizer.normalize_rewards(batch["reward"])
 
