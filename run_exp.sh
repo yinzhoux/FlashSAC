@@ -47,3 +47,13 @@ run_in_tmux() {
 #                 --config_name metra_base \
 #                 --overrides agent=metra-no-rewd-norm \
 #                 --overrides exp_name=metra-normal-no-rewd-norm"
+
+
+# 5. use gaussian encoder
+#    NO Reward norm; NO Encoder weight norm; episode 1000
+run_in_tmux "5-gaussian" \
+"export MUJOCO_GL=egl && \
+uv run python ~/zjx/FlashSAC/train.py \
+                --config_name metra_base \
+                --overrides agent=metra-no-rewd-norm \
+                --overrides exp_name=metra-gaussian"
