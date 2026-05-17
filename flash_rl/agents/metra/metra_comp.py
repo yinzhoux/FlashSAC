@@ -1,6 +1,6 @@
 import torch
 from .metra_config import METRAConfig
-from .network import SkillEncoder, SkillGEncoder
+from .network import SkillEncoder, SkillGEncoder, SkillSimpleEncoder
 from flash_rl.agents.utils.network import Network
 from flash_rl.agents.utils.function import build_metra_skill_masks
 import torch.optim as optim
@@ -172,6 +172,13 @@ def init_metra_networks(
             input_dim    = actor_observation_dim - skill_dim,
             output_dim   = skill_dim,
             hidden_sizes = [skill_encoder_hidden_dim] * skill_encoder_num_layers
+        ).to(device)
+    elif cfg.encoder_type  == "simple":
+         skill_encoder_net  = SkillSimpleEncoder(
+            obs_dim    = actor_observation_dim - skill_dim,
+            skill_dim  = skill_dim,
+            hidden_dim = skill_encoder_hidden_dim,
+            num_layers = skill_encoder_num_layers,
         ).to(device)
     
     skill_encoder_optimizer, skill_encoder_scheduler = gen_optimizer(
