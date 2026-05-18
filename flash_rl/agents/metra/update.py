@@ -388,24 +388,29 @@ def update_dual_lambda(
     dual_lambda: Network,
     constraint_term: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
+    
     with torch.no_grad():
-        constraint_term = constraint_term.detach()
+        cst_mean = constraint_term.detach().mean()
 
-    lambda_value = dual_lambda().clone()
-    dual_lambda_loss = (lambda_value * constraint_term).mean()
+    log_lambda = dual_lambda.network.log_temp 
+
+    dual_lambda_loss = log_lambda * cst_mean
 
     assert dual_lambda.optimizer is not None
     dual_lambda.optimizer.zero_grad(set_to_none=True)
+    
     dual_lambda_loss.backward()
     dual_lambda.optimizer.step()
 
     if dual_lambda.scheduler is not None:
         dual_lambda.scheduler.step()
 
-    updated_lambda = dual_lambda().detach().clone()
+    with torch.no_grad():
+        updated_lambda = torch.exp(log_lambda)
+
     return {
         "dual_lambda/loss": dual_lambda_loss.detach(),
-        "dual_lambda/value": updated_lambda
+        "dual_lambda/value": updated_lambda.detach()
     }
 
 def update_policy(
