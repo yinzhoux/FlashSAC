@@ -101,14 +101,17 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 device=self._device,
             )
         # Observation normalization (matching official METRA consistent_normalize)
-        self._obs_norm_enabled = getattr(self._cfg, 'obs_normalizer_type', 'off') not in (None, 'off')
-        if self._obs_norm_enabled:
-            mean_list, std_list = get_obs_normalizer_preset(self._cfg.obs_normalizer_type)
-            self.register_buffer('_obs_mean', torch.tensor(mean_list, dtype=torch.float32, device=self._device))
-            self.register_buffer('_obs_std', torch.tensor(std_list, dtype=torch.float32, device=self._device))
-        else:
+        _norm_type = getattr(self._cfg, 'obs_normalizer_type', 'off')
+        # YAML 1.1 parses unquoted "off" as boolean False
+        if _norm_type in (None, False, 'off'):
+            self._obs_norm_enabled = False
             self._obs_mean = None
             self._obs_std = None
+        else:
+            self._obs_norm_enabled = True
+            mean_list, std_list = get_obs_normalizer_preset(_norm_type)
+            self.register_buffer('_obs_mean', torch.tensor(mean_list, dtype=torch.float32, device=self._device))
+            self.register_buffer('_obs_std', torch.tensor(std_list, dtype=torch.float32, device=self._device))
 
     def _normalize_obs(self, obs: torch.Tensor) -> torch.Tensor:
         """Apply observation normalization (matching official consistent_normalize)."""
@@ -370,20 +373,48 @@ class METRAAgent(BaseAgent[METRAConfig]):
         update_info['env/reward'] = float(torch.mean(batch["reward"]).item())
         return update_info
 
-    def save(self, path: str) -> None: 
-        super().save(path)
-        self._skill_encoder.save(os.path.join(path, "skill_encoder.pt"))
-        self._dual_lambda.save(os.path.join(path, "dual_lambda.pt"))
+    def save(self, path: str) -> None:
+        os.makedirs(path, exist_ok=True)
+        self._actor.save(os.path.join(path, "actor.pt"))
+        self._critic.save(os.path.join(path, "critic.pt"))
+        self._target_critic.save(os.path.join(path, "target_critic.pt"))
+        self._temperature.save(os.path.join(path, "temperature.pt"))
         if self.reward_normalizer is not None:
             self.reward_normalizer.save(os.path.join(path, "reward_normalizer.pt"))
 
-    def load(self, path: str) -> None: 
-        super().load(path)
+        agent_state: dict[str, Any] = {
+            "update_step": self._update_step,
+            "grad_scaler_state_dict": self._grad_scaler.state_dict(),
+        }
+        torch.save(agent_state, os.path.join(path, "agent_state.pt"))
+        print(f"\033[32m[FlashSAC]\033[0m Successfully saved checkpoint {self._update_step} at {path}.")
+
+        self._skill_encoder.save(os.path.join(path, "skill_encoder.pt"))
+        self._dual_lambda.save(os.path.join(path, "dual_lambda.pt"))
+
+    def load(self, path: str) -> None:
         load_optimizer = self._cfg.load_optimizer
+        self._actor.load(os.path.join(path, "actor.pt"), load_optimizer=load_optimizer)
+        self._critic.load(os.path.join(path, "critic.pt"), load_optimizer=load_optimizer)
+        self._target_critic.load(os.path.join(path, "target_critic.pt"), load_optimizer=False)
+        self._temperature.load(os.path.join(path, "temperature.pt"), load_optimizer=load_optimizer)
+
+        # Load agent-level optimizer state
+        if load_optimizer:
+            agent_state_path = os.path.join(path, "agent_state.pt")
+            assert os.path.exists(agent_state_path)
+            agent_state = torch.load(agent_state_path, map_location=self._device)
+            self._update_step = agent_state["update_step"]
+            self._grad_scaler.load_state_dict(agent_state["grad_scaler_state_dict"])
+
+        if self._cfg.load_reward_normalizer:
+            assert self.reward_normalizer is not None
+            self.reward_normalizer.load(os.path.join(path, "reward_normalizer.pt"))
+
+        print(f"\033[32m[FlashSAC]\033[0m Successfully loaded checkpoint from {path}.")
+
         self._skill_encoder.load(os.path.join(path, "skill_encoder.pt"), load_optimizer=load_optimizer)
         self._dual_lambda.load(os.path.join(path, "dual_lambda.pt"), load_optimizer=load_optimizer)
-        if self._cfg.load_reward_normalizer and self.reward_normalizer is not None:
-            self.reward_normalizer.load(os.path.join(path, "reward_normalizer.pt"))
 
     def can_start_training(self): 
         return self._replay_buffer.can_sample()
