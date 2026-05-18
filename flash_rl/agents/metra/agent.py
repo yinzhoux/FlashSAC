@@ -10,7 +10,7 @@ from flash_rl.agents.utils.reward_normalization import RewardNormalizer
 from flash_rl.types import Tensor
 
 from .metra_config import METRAConfig
-from .metra_comp import init_metra_networks
+from .metra_comp import init_metra_networks, get_obs_normalizer_preset
 from flash_rl.buffers.metra_buffer import METRATorchBuffer
 from flash_rl.agents.utils.function import *
 from .update import (
@@ -100,6 +100,21 @@ class METRAAgent(BaseAgent[METRAConfig]):
                 load_rms=self._cfg.load_reward_normalizer,
                 device=self._device,
             )
+        # Observation normalization (matching official METRA consistent_normalize)
+        self._obs_norm_enabled = getattr(self._cfg, 'obs_normalizer_type', 'off') not in (None, 'off')
+        if self._obs_norm_enabled:
+            mean_list, std_list = get_obs_normalizer_preset(self._cfg.obs_normalizer_type)
+            self.register_buffer('_obs_mean', torch.tensor(mean_list, dtype=torch.float32, device=self._device))
+            self.register_buffer('_obs_std', torch.tensor(std_list, dtype=torch.float32, device=self._device))
+        else:
+            self._obs_mean = None
+            self._obs_std = None
+
+    def _normalize_obs(self, obs: torch.Tensor) -> torch.Tensor:
+        """Apply observation normalization (matching official consistent_normalize)."""
+        if not self._obs_norm_enabled:
+            return obs
+        return (obs - self._obs_mean) / (self._obs_std + 1e-8)
 
     def set_eval_skills(self, skills: Tensor, normalize: bool = True) -> None: 
         """Set fixed evaluation skills used when ``training=False`` rollouts."""
@@ -193,6 +208,7 @@ class METRAAgent(BaseAgent[METRAConfig]):
     ) -> Tensor       : 
         temperature        = 1.0 if training else 0.0
         observations       = torch.as_tensor(prev_transition["next_observation"], dtype=torch.float32).to(self._device)
+        observations       = self._normalize_obs(observations)
         skills             = self.get_or_make_skill(observations.shape[0], training=training)
         actor_observations = concat_obs_skill(observations, skills)
 
@@ -266,6 +282,12 @@ class METRAAgent(BaseAgent[METRAConfig]):
         skills                        = batch["skill"]
         raw_observations              = batch["raw_observation"]
         raw_next_observations         = batch["raw_next_observation"]
+
+        # Apply observation normalization (matching official METRA preset)
+        raw_observations      = self._normalize_obs(raw_observations)
+        raw_next_observations = self._normalize_obs(raw_next_observations)
+        batch["raw_observation"]      = raw_observations
+        batch["raw_next_observation"] = raw_next_observations
 
         skill_encoder_info, _, constraint_term = update_skill_encoder(
             skill_encoder      = self._skill_encoder,

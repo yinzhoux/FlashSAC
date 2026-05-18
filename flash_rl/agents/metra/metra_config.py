@@ -88,3 +88,5 @@ class METRAConfig     :
     default_skill_x: float
     default_skill_y: float
     default_skill_index: int
+
+    obs_normalizer_type: str  # 'off' or 'preset' (e.g. ant_preset, half_cheetah_preset)

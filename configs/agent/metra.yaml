@@ -90,3 +90,5 @@ use_encoder_to_update: true
 default_skill_x: 1.0
 default_skill_y: 0.0
 default_skill_index: 0
+
+obs_normalizer_type: off  # 'off' or 'preset' (e.g. ant_preset, half_cheetah_preset)
