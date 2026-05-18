@@ -25,12 +25,13 @@ run_in_tmux() {
 # uv run python ~/zjx/FlashSAC/train.py \
 #                 --config_name metra_base \
 #                 --overrides agent=metra-sac" \
-#                 --overrides exp_name=sac \
-#                 --overrides group_name=sac
+#                 --overrides exp_name=sac
 
 # 2. metra normal training with:
-#    Reward norm; NO Encoder weight norm; episode 200
-# run_in_tmux "metra_normal" \
+# 12. rerun this after refactor dual lambda update.
+
+#    Reward norm; NO Encoder weight norm; episode 1000
+# run_in_tmux "2-metra_normal" \
 # "export MUJOCO_GL=egl && \
 # uv run python ~/zjx/FlashSAC/train.py \
 #                 --config_name metra_base \
@@ -40,6 +41,8 @@ run_in_tmux() {
 # 3. rerun 2 for episode 1000.
 
 # 4. remove reward normalization
+# 11. rerun this after refactor dual lambda update.
+
 #    NO Reward norm; NO Encoder weight norm; episode 1000
 # run_in_tmux "4-metra-no-rewd-norm" \
 # "export MUJOCO_GL=egl && \
@@ -51,9 +54,66 @@ run_in_tmux() {
 
 # 5. use gaussian encoder
 #    NO Reward norm; NO Encoder weight norm; episode 1000
-run_in_tmux "5-gaussian" \
+# run_in_tmux "5-gaussian" \
+# "export MUJOCO_GL=egl && \
+# uv run python ~/zjx/FlashSAC/train.py \
+#                 --config_name metra_base \
+#                 --overrides agent=metra-gaussian \
+#                 --overrides exp_name=metra-gaussian"
+
+# 6. use simple encoder
+#    NO Reward norm; NO Encoder weight norm; episode 1000
+# run_in_tmux "6-simple" \
+# "export MUJOCO_GL=egl && \
+# uv run python ~/zjx/FlashSAC/train.py \
+#                 --config_name metra_base \
+#                 --overrides agent=metra-simple \
+#                 --overrides exp_name=metra-simple"
+
+# 7. metra normal training with:
+#    Reward norm; NO Encoder weight norm; episode 1000, longer train
+# run_in_tmux "7-metra_normal-long" \
+# "export MUJOCO_GL=egl && \
+# uv run python ~/zjx/FlashSAC/train.py \
+#                 --config_name metra_base_long \
+#                 --overrides agent=metra \
+#                 --overrides exp_name=metra-normal-long"
+
+# 8. discrete skills: 4
+#    NO Reward norm; NO Encoder weight norm; episode 1000
+# run_in_tmux "8-discrete" \
+# "export MUJOCO_GL=egl && \
+# uv run python ~/zjx/FlashSAC/train.py \
+#                 --config_name metra_base \
+#                 --overrides agent=metra-discrete \
+#                 --overrides exp_name=metra-discrete"
+
+# 9. add encoder weight norm: 4
+# 13. rerun this after refactor lambda update.
+
+#    NO Reward norm; weight norm; episode 1000
+# run_in_tmux "9-encoder-weight-norm" \
+# "export MUJOCO_GL=egl && \
+# uv run python ~/zjx/FlashSAC/train.py \
+#                 --config_name metra_base \
+#                 --overrides agent=metra-encoder-weight-norm \
+#                 --overrides exp_name=metra-encoder-weight-norm"
+
+# 10. larger discrete skill space: 8
+#    NO Reward norm; NO Encoder weight norm; episode 1000
+# run_in_tmux "10-discrete-larger" \
+# "export MUJOCO_GL=egl && \
+# uv run python ~/zjx/FlashSAC/train.py \
+#                 --config_name metra_base \
+#                 --overrides agent=metra-discrete-larger \
+#                 --overrides exp_name=metra-discrete-larger"
+
+# 14. metra normal training with low init lambda:
+
+#    Reward norm; Encoder weight norm; episode 1000
+run_in_tmux "14-metra-low-lambda-init" \
 "export MUJOCO_GL=egl && \
 uv run python ~/zjx/FlashSAC/train.py \
                 --config_name metra_base \
-                --overrides agent=metra-no-rewd-norm \
-                --overrides exp_name=metra-gaussian"
+                --overrides agent=metra-low-lambda-init \
+                --overrides exp_name=metra-normal-low-lambda"
