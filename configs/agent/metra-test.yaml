@@ -12,10 +12,10 @@ normalized_G_max: 5.0
 asymmetric_observation: false
 device_type           : 'cpu'
 
-buffer_max_length : 1_000_000
-buffer_min_length : 10_000
+buffer_max_length : 1000
+buffer_min_length : 10
 buffer_device_type: 'cpu'
-sample_batch_size : 2048
+sample_batch_size : 10
 
 # learning rate
 sac_scheduler_type : 'cosine'

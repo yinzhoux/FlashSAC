@@ -111,9 +111,20 @@ run_in_tmux() {
 # 14. metra normal training with low init lambda:
 
 #    Reward norm; Encoder weight norm; episode 1000
-run_in_tmux "14-metra-low-lambda-init" \
+# run_in_tmux "14-metra-low-lambda-init" \
+# "export MUJOCO_GL=egl && \
+# uv run python ~/zjx/FlashSAC/train.py \
+#                 --config_name metra_base \
+#                 --overrides agent=metra-low-lambda-init \
+#                 --overrides exp_name=metra-normal-low-lambda"
+
+# 15. metra normal on cpu.
+
+#    Reward norm; NO Encoder weight norm; episode 1000
+run_in_tmux "15-metra_normal-cpu" \
 "export MUJOCO_GL=egl && \
 uv run python ~/zjx/FlashSAC/train.py \
                 --config_name metra_base \
-                --overrides agent=metra-low-lambda-init \
-                --overrides exp_name=metra-normal-low-lambda"
+                --overrides agent=metra-cpu \
+                --overrides exp_name=metra-normal_cpu" \
+                --overrides 
