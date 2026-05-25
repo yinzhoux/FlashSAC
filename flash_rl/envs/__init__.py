@@ -182,8 +182,10 @@ def create_vec_env(
     ) -> gym.Env[NDArray, NDArray]:
         if env_type == "mujoco":
             from flash_rl.envs.mujoco import make_mujoco_env
-
+            from flash_rl.envs.wrappers import AntGlobalPositionWrapper
             env = make_mujoco_env(env_name, seed, **kwargs)
+            env = AntGlobalPositionWrapper(env)
+            
         elif env_type == "d4rl":
             from flash_rl.envs.d4rl import make_d4rl_env
 

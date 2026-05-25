@@ -82,7 +82,7 @@ lambda_lr_end_value   : null
 lambda_lr_warmup_steps: null
 lambda_lr_decay_steps : null
 
-encoder_type             : 'flash'
+encoder_type             : 'gaussian'
 skill_type               : 'continuous'
 skill_dim                : 2
 skill_encoder_hidden_dim : 1024
@@ -98,4 +98,4 @@ default_skill_x: 1.0
 default_skill_y: 0.0
 default_skill_index: 0
 
-obs_normalizer_type: false  # CHANGED: official-style preset; resolved by env_name in METRA_train.py
+obs_normalizer_type: preset  # CHANGED: official-style preset; resolved by env_name in METRA_train.py

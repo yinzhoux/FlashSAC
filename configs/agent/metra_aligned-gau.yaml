@@ -82,7 +82,7 @@ lambda_lr_end_value   : null
 lambda_lr_warmup_steps: null
 lambda_lr_decay_steps : null
 
-encoder_type             : 'flash'
+encoder_type             : 'gaussian'
 skill_type               : 'continuous'
 skill_dim                : 2
 skill_encoder_hidden_dim : 1024

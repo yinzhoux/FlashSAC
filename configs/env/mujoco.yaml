@@ -3,7 +3,7 @@
 ##################################################################################
 
 env_type: 'mujoco'
-env_name: 'HalfCheetah-v4'
+env_name: 'Ant-v4'
 num_env_steps: ${num_env_steps}
 
 seed: ${seed}

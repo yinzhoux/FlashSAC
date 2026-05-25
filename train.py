@@ -90,6 +90,9 @@ def run(args: argparse.Namespace) -> None:
     observation_space = train_env.observation_space
     action_space = train_env.action_space
 
+    print(f'Env Info: Observation dim: {observation_space.shape}')
+    print(f'Env Info: Action dim: {action_space.shape}')
+
     #############################
     # agent
     #############################

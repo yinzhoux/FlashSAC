@@ -37,7 +37,7 @@ num_record_episodes: 1
 # METRA-Aligned Training Rhythm (epoch-based, not step-based)
 ##################################################################################
 
-n_epochs               : 1000   # total training epochs
+n_epochs               : 10000   # total training epochs
 traj_batch_size        : 8      # episodes collected per epoch  (--traj_batch_size 8)
 max_path_length        : 200    # max steps per episode         (--max_path_length 200)
 trans_optimization_epochs: 50   # gradient updates per epoch   (--trans_optimization_epochs 50)
@@ -68,9 +68,9 @@ n_step: 1
 ##################################################################################
 
 n_epochs_per_log   : 100   # log every 100 epochs  (= 160 000 env steps, matches official --n_epochs_per_log 100)
-n_epochs_per_eval  : 1000  # eval every 1000 epochs (= 1.6 M env steps,   matches official --n_epochs_per_eval 1000)
-n_epochs_per_record: 1000  # record video at same cadence as eval
-n_epochs_per_save  : 1000  # checkpoint at end of 1000-epoch run
+n_epochs_per_eval  : 100  # eval every 1000 epochs (= 1.6 M env steps,   matches official --n_epochs_per_eval 1000)
+n_epochs_per_record: 100  # record video at same cadence as eval
+n_epochs_per_save  : 100  # checkpoint at end of 1000-epoch run
 max_checkpoints_to_keep: 2
 
 ##################################################################################

@@ -20,6 +20,13 @@ run_in_tmux() {
 
 root_dir=/home/helix/projects/METRA-Projects/FlashSAC
 
+# test running
+# export MUJOCO_GL=egl
+# uv run python ${root_dir}/train.py \
+#                 --config_name metra_base_test \
+#                 --overrides agent=metra-test \
+#                 --overrides exp_name=env_info
+
 # 1. sac normal training with:
 #    Reward norm; Encoder weight norm;
 # run_in_tmux "1-sac_normal" \
@@ -123,10 +130,62 @@ root_dir=/home/helix/projects/METRA-Projects/FlashSAC
 # 15. metra normal on cpu.
 
 #    Reward norm; NO Encoder weight norm; episode 1000
-run_in_tmux "15-metra_normal-cpu" \
+# run_in_tmux "15-metra_normal-cpu" \
+# "export MUJOCO_GL=egl && \
+# uv run python ${root_dir}/train.py \
+#                 --config_name metra_base \
+#                 --overrides agent=metra-cpu \
+#                 --overrides exp_name=metra-normal_cpu" \
+#                 --overrides 
+
+#-===========METRA train===============
+# run_in_tmux "2-metra-test-position-info-param-tuning" \
+# "export MUJOCO_GL=egl && \
+# uv run python METRA_train.py \
+#   --config-path configs \
+#   --config-name metra_aligned_base \
+#   env.env_name=Ant-v4 \
+#   group_name=compare \
+#   exp_name=ant_aligned \
+#   seed=0  \
+#   exp_name=test-postion-info"
+
+# test
+# run_in_tmux "2-metra-test-position-info-test" \
+# "export MUJOCO_GL=egl && \
+# uv run python METRA_train.py \
+#   --config-path configs \
+#   --config-name metra_aligned_base \
+#   env.env_name=Ant-v4 \
+#   group_name=compare \
+#   exp_name=test-info \
+#   seed=0  \
+#   exp_name=test-postion-info \
+#   n_epochs=1 "
+
+#-===========METRA train===============
+run_in_tmux "3-metra-p-gau" \
 "export MUJOCO_GL=egl && \
-uv run python ${root_dir}/train.py \
-                --config_name metra_base \
-                --overrides agent=metra-cpu \
-                --overrides exp_name=metra-normal_cpu" \
-                --overrides 
+uv run python METRA_train.py \
+  --config-path configs \
+  --config-name metra_aligned_base \
+  env.env_name=Ant-v4 \
+  group_name=compare \
+  exp_name=ant_aligned_gau \
+  seed=0  \
+  exp_name=test-postion-info \
+  agent=metra_aligned-gau"
+
+# #-===========METRA train===============
+# run_in_tmux "4-metra-p-episode200" \
+# "export MUJOCO_GL=egl && \
+# uv run python METRA_train.py \
+#   --config-path configs \
+#   --config-name metra_aligned_base \
+#   env.env_name=Ant-v4 \
+#   group_name=compare \
+#   exp_name=ant_aligned \
+#   seed=0  \
+#   exp_name=test-postion-info \
+#   agent_name=metra_aligned-episode200 \
+#   env.max_episode_steps=200"

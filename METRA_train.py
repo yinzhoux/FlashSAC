@@ -42,6 +42,7 @@ from flash_rl.common import create_logger
 from flash_rl.envs import create_envs
 from flash_rl.evaluation import evaluate, record_video
 from flash_rl.types import Tensor
+from plot_metra_eval import generate_eval_artifacts
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,9 @@ def _resolve_obs_normalizer_type(cfg: DictConfig) -> None:
                 f"Got env.env_name={cfg.env.env_name!r}. Supported keys: {supported}."
             )
         resolved = _ENV_TO_NORMALIZER_PRESET[env_name]
+        include_global_position_info = bool(getattr(cfg.env, "include_global_position_info", False))
+        if env_name in ("halfcheetah-v4", "half_cheetah-v4", "half_cheetah") and not include_global_position_info:
+            resolved = "half_cheetah_no_x_preset"
     elif isinstance(raw_normalizer, str):
         resolved = raw_normalizer
     else:
@@ -150,6 +154,37 @@ def _prune_old_checkpoints(save_path_base: str, max_checkpoints_to_keep: Optiona
     checkpoint_dirs.sort(key=lambda item: item[0], reverse=True)
     for _, path in checkpoint_dirs[max_checkpoints_to_keep:]:
         shutil.rmtree(path, ignore_errors=True)
+
+
+def _save_eval_artifacts(
+    agent: object,
+    record_env: object,
+    cfg: DictConfig,
+    save_path_base: str,
+    *,
+    label: str,
+) -> None:
+    artifact_dir = os.path.join(save_path_base, "eval_artifacts", label)
+    artifact_kwargs = dict(
+        num_random_trajectories=int(getattr(cfg, "num_random_trajectories", 48)),
+        num_video_repeats=int(getattr(cfg, "num_video_repeats", 2)),
+        video_fps=int(getattr(cfg, "video_fps", 15)),
+        video_skip_frames=int(getattr(cfg, "video_skip_frames", 1)),
+        eval_plot_axis=(list(getattr(cfg, "eval_plot_axis")) if getattr(cfg, "eval_plot_axis", None) is not None else None),
+    )
+    paths = generate_eval_artifacts(
+        agent=agent,
+        env=record_env,
+        cfg=cfg,
+        output_dir=artifact_dir,
+        **artifact_kwargs,
+    )
+    print(
+        "Saved eval artifacts:",
+        f"phi={paths['phi_plot_path']}",
+        f"traj={paths['traj_plot_path']}",
+        f"video={paths['video_path']}",
+    )
 
 
 def run(args: argparse.Namespace) -> None:
@@ -188,6 +223,8 @@ def run(args: argparse.Namespace) -> None:
 
     observation_space = train_env.observation_space
     action_space = train_env.action_space
+    print(f'Env Info: Observation dim: {observation_space.shape}')
+    print(f'Env Info: Action dim: {action_space.shape}')
 
     # ─────────────────────────────────────────────────────────────────────────
     # Agent
@@ -221,6 +258,7 @@ def run(args: argparse.Namespace) -> None:
     video_info = record_video(agent, record_env, cfg.num_record_episodes, cfg.env.env_type)
     logger.update_metric(**eval_info)
     logger.update_metric(**video_info)
+    _save_eval_artifacts(agent, record_env, cfg, save_path_base, label="epoch000000_step000000")
     logger.log_metric(step=0)
     logger.reset()
 
@@ -333,6 +371,13 @@ def run(args: argparse.Namespace) -> None:
         if (epoch + 1) % cfg.n_epochs_per_eval == 0:
             eval_info = evaluate(agent, eval_env, cfg.num_eval_episodes, cfg.env.env_type)
             logger.update_metric(**eval_info)
+            _save_eval_artifacts(
+                agent,
+                record_env,
+                cfg,
+                save_path_base,
+                label=f"epoch{epoch + 1:06d}_step{total_env_steps:09d}",
+            )
 
         # ── Video recording ───────────────────────────────────────────────────
         if (epoch + 1) % cfg.n_epochs_per_record == 0:
@@ -352,6 +397,7 @@ def run(args: argparse.Namespace) -> None:
     video_info = record_video(agent, record_env, cfg.num_record_episodes, cfg.env.env_type)
     logger.update_metric(**eval_info)
     logger.update_metric(**video_info)
+    _save_eval_artifacts(agent, record_env, cfg, save_path_base, label=f"final_step{total_env_steps:09d}")
     logger.log_metric(step=total_env_steps)
 
 
