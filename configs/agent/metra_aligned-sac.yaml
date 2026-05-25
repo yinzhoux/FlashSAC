@@ -1,21 +1,28 @@
 ##################################################################################
-# METRA
+# METRA - Aligned with official METRA training rhythm
+#
+# Differences from metra.yaml:
+#   sample_batch_size : 256     -> 2048  (match trans_minibatch_size=256)
+#   obs_normalizer_type: ant_preset -> off  (match normalizer_type=preset)
+#   normalize_reward  : false   -> true  (match scale_reward=1.0, no dynamic norm)
+#   normalized_G_max  : 100.0   -> 5.0   (C51 range for unscaled intrinsic reward;
+#                                          per-step reward ∈ [-1,1], discounted ≈ ±100)
 ##################################################################################
 
 agent_type: 'metra'
 
 seed: ${seed}
 
-normalize_reward: true
-normalized_G_max: 5.0
+normalize_reward  : false    # CHANGED: match official scale_reward=1.0 (no normalization)
+normalized_G_max  : 100.0    # CHANGED: C51 range for unscaled intrinsic reward
 
 asymmetric_observation: false
 device_type           : 'cuda'
 
-buffer_max_length : 1000
-buffer_min_length : 10
+buffer_max_length : 1_000_000
+buffer_min_length : 10_000
 buffer_device_type: 'cpu'
-sample_batch_size : 10
+sample_batch_size : 256      # CHANGED: match trans_minibatch_size=256 (default 2048)
 
 # learning rate
 sac_scheduler_type : 'cosine'
@@ -86,9 +93,9 @@ dual_lambda_init_value: 30.0
 
 constraint_epsilon: 1e-3
 
-use_encoder_to_update: true
+use_encoder_to_update: false
 default_skill_x: 1.0
 default_skill_y: 0.0
 default_skill_index: 0
 
-obs_normalizer_type: off  # 'off' or 'preset' (e.g. ant_preset, half_cheetah_preset)
+obs_normalizer_type: false  # CHANGED: match normalizer_type=preset (ant_preset)
