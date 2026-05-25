@@ -2,10 +2,10 @@
 # METRA - Aligned with official METRA training rhythm
 #
 # Differences from metra.yaml:
-#   sample_batch_size : 256     -> 2048  (match trans_minibatch_size=256)
-#   obs_normalizer_type: ant_preset -> off  (match normalizer_type=preset)
-#   normalize_reward  : false   -> true  (match scale_reward=1.0, no dynamic norm)
-#   normalized_G_max  : 100.0   -> 5.0   (C51 range for unscaled intrinsic reward;
+#   sample_batch_size : 2048    -> 256   (match trans_minibatch_size=256)
+#   obs_normalizer_type: off    -> preset (resolve by env_name to *_preset)
+#   normalize_reward  : true    -> false  (match scale_reward=1.0, no dynamic norm)
+#   normalized_G_max  : 5.0     -> 100.0 (C51 range for unscaled intrinsic reward;
 #                                          per-step reward ∈ [-1,1], discounted ≈ ±100)
 ##################################################################################
 
@@ -98,4 +98,4 @@ default_skill_x: 1.0
 default_skill_y: 0.0
 default_skill_index: 0
 
-obs_normalizer_type: false  # CHANGED: match normalizer_type=preset (ant_preset)
+obs_normalizer_type: preset  # CHANGED: official-style preset; resolved by env_name in METRA_train.py

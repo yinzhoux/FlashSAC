@@ -1,11 +1,16 @@
 import torch
+from torch import nn
+from torch.distributions import Categorical, MixtureSameFamily, Normal
+from torch.distributions.independent import Independent
+
 from .distributions import TanhNormal
 from .modules import MultiHeadedMLPModule
-from .modules.gaussian_mlp_module import GaussianMLPModule, GaussianMLPIndependentStdModule, \
-    GaussianMLPTwoHeadedModule, GaussianMLPBaseModule
-from torch import nn
-from torch.distributions import Normal, Categorical, MixtureSameFamily
-from torch.distributions.independent import Independent
+from .modules.gaussian_mlp_module import (
+    GaussianMLPBaseModule,
+    GaussianMLPIndependentStdModule,
+    GaussianMLPModule,
+    GaussianMLPTwoHeadedModule,
+)
 
 
 class ForwardWithTransformTrait(object):
@@ -14,15 +19,14 @@ class ForwardWithTransformTrait(object):
 
         if self._min_std_param or self._max_std_param:
             log_std_uncentered = log_std_uncentered.clamp(
-                min=(None if self._min_std_param is None else
-                     self._min_std_param.item()),
-                max=(None if self._max_std_param is None else
-                     self._max_std_param.item()))
+                min=(None if self._min_std_param is None else self._min_std_param.item()),
+                max=(None if self._max_std_param is None else self._max_std_param.item()),
+            )
 
-        if self._std_parameterization == 'exp':
+        if self._std_parameterization == "exp":
             std = log_std_uncentered.exp()
         else:
-            std = log_std_uncentered.exp().exp().add(1.).log()
+            std = log_std_uncentered.exp().exp().add(1.0).log()
 
         dist = self._norm_dist_class(mean, std)
         # This control flow is needed because if a TanhNormal distribution is
@@ -49,6 +53,7 @@ class ForwardWithTransformTrait(object):
 
         return dist, dist_transformed
 
+
 class ForwardWithChunksTrait(object):
     def forward_with_chunks(self, *inputs, merge):
         mean = []
@@ -62,15 +67,14 @@ class ForwardWithChunksTrait(object):
 
         if self._min_std_param or self._max_std_param:
             log_std_uncentered = log_std_uncentered.clamp(
-                min=(None if self._min_std_param is None else
-                     self._min_std_param.item()),
-                max=(None if self._max_std_param is None else
-                     self._max_std_param.item()))
+                min=(None if self._min_std_param is None else self._min_std_param.item()),
+                max=(None if self._max_std_param is None else self._max_std_param.item()),
+            )
 
-        if self._std_parameterization == 'exp':
+        if self._std_parameterization == "exp":
             std = log_std_uncentered.exp()
         else:
-            std = log_std_uncentered.exp().exp().add(1.).log()
+            std = log_std_uncentered.exp().exp().add(1.0).log()
         dist = self._norm_dist_class(mean, std)
         # This control flow is needed because if a TanhNormal distribution is
         # wrapped by torch.distributions.Independent, then custom functions
@@ -83,21 +87,21 @@ class ForwardWithChunksTrait(object):
 
         return dist
 
+
 class ForwardModeTrait(object):
     def forward_mode(self, *inputs):
         mean, log_std_uncentered = self._get_mean_and_log_std(*inputs)
 
         if self._min_std_param or self._max_std_param:
             log_std_uncentered = log_std_uncentered.clamp(
-                min=(None if self._min_std_param is None else
-                     self._min_std_param.item()),
-                max=(None if self._max_std_param is None else
-                     self._max_std_param.item()))
+                min=(None if self._min_std_param is None else self._min_std_param.item()),
+                max=(None if self._max_std_param is None else self._max_std_param.item()),
+            )
 
-        if self._std_parameterization == 'exp':
+        if self._std_parameterization == "exp":
             std = log_std_uncentered.exp()
         else:
-            std = log_std_uncentered.exp().exp().add(1.).log()
+            std = log_std_uncentered.exp().exp().add(1.0).log()
 
         dist = self._norm_dist_class(mean, std)
         # This control flow is needed because if a TanhNormal distribution is
@@ -112,51 +116,62 @@ class ForwardModeTrait(object):
         return dist.mean
 
 
-
 class GaussianMLPModuleEx(GaussianMLPModule, ForwardWithTransformTrait, ForwardWithChunksTrait, ForwardModeTrait):
     pass
-class GaussianMLPIndependentStdModuleEx(GaussianMLPIndependentStdModule, ForwardWithTransformTrait, ForwardWithChunksTrait, ForwardModeTrait):
+
+
+class GaussianMLPIndependentStdModuleEx(
+    GaussianMLPIndependentStdModule, ForwardWithTransformTrait, ForwardWithChunksTrait, ForwardModeTrait
+):
     pass
-class GaussianMLPTwoHeadedModuleEx(GaussianMLPTwoHeadedModule, ForwardWithTransformTrait, ForwardWithChunksTrait, ForwardModeTrait):
+
+
+class GaussianMLPTwoHeadedModuleEx(
+    GaussianMLPTwoHeadedModule, ForwardWithTransformTrait, ForwardWithChunksTrait, ForwardModeTrait
+):
     pass
 
 
 class GaussianMixtureMLPModule(GaussianMLPBaseModule):
-    def __init__(self,
-                 input_dim,
-                 output_dim,
-                 num_components,
-                 hidden_sizes=(32, 32),
-                 hidden_nonlinearity=torch.tanh,
-                 hidden_w_init=nn.init.xavier_uniform_,
-                 hidden_b_init=nn.init.zeros_,
-                 output_nonlinearity=None,
-                 output_w_init=nn.init.xavier_uniform_,
-                 output_b_init=nn.init.zeros_,
-                 learn_std=True,
-                 init_std=1.0,
-                 min_std=1e-6,
-                 max_std=None,
-                 std_parameterization='exp',
-                 layer_normalization=False,
-                 normal_distribution_cls=Normal,
-                 **kwargs):
-        super().__init__(input_dim=input_dim,
-                         output_dim=output_dim,
-                         hidden_sizes=hidden_sizes,
-                         hidden_nonlinearity=hidden_nonlinearity,
-                         hidden_w_init=hidden_w_init,
-                         hidden_b_init=hidden_b_init,
-                         output_nonlinearity=output_nonlinearity,
-                         output_w_init=output_w_init,
-                         output_b_init=output_b_init,
-                         learn_std=learn_std,
-                         init_std=init_std,
-                         min_std=min_std,
-                         max_std=max_std,
-                         std_parameterization=std_parameterization,
-                         layer_normalization=layer_normalization,
-                         normal_distribution_cls=normal_distribution_cls)
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        num_components,
+        hidden_sizes=(32, 32),
+        hidden_nonlinearity=torch.tanh,
+        hidden_w_init=nn.init.xavier_uniform_,
+        hidden_b_init=nn.init.zeros_,
+        output_nonlinearity=None,
+        output_w_init=nn.init.xavier_uniform_,
+        output_b_init=nn.init.zeros_,
+        learn_std=True,
+        init_std=1.0,
+        min_std=1e-6,
+        max_std=None,
+        std_parameterization="exp",
+        layer_normalization=False,
+        normal_distribution_cls=Normal,
+        **kwargs,
+    ):
+        super().__init__(
+            input_dim=input_dim,
+            output_dim=output_dim,
+            hidden_sizes=hidden_sizes,
+            hidden_nonlinearity=hidden_nonlinearity,
+            hidden_w_init=hidden_w_init,
+            hidden_b_init=hidden_b_init,
+            output_nonlinearity=output_nonlinearity,
+            output_w_init=output_w_init,
+            output_b_init=output_b_init,
+            learn_std=learn_std,
+            init_std=init_std,
+            min_std=min_std,
+            max_std=max_std,
+            std_parameterization=std_parameterization,
+            layer_normalization=layer_normalization,
+            normal_distribution_cls=normal_distribution_cls,
+        )
 
         self._mean_module = MultiHeadedMLPModule(
             n_heads=num_components + 1,
@@ -182,15 +197,14 @@ class GaussianMixtureMLPModule(GaussianMLPBaseModule):
 
         if self._min_std_param or self._max_std_param:
             log_std_uncentered = log_std_uncentered.clamp(
-                min=(None if self._min_std_param is None else
-                     self._min_std_param.item()),
-                max=(None if self._max_std_param is None else
-                     self._max_std_param.item()))
+                min=(None if self._min_std_param is None else self._min_std_param.item()),
+                max=(None if self._max_std_param is None else self._max_std_param.item()),
+            )
 
-        if self._std_parameterization == 'exp':
+        if self._std_parameterization == "exp":
             std = log_std_uncentered.exp()
         else:
-            std = log_std_uncentered.exp().exp().add(1.).log()
+            std = log_std_uncentered.exp().exp().add(1.0).log()
 
         categorical_dist = Categorical(logits=logits)
         mean = torch.stack(means, dim=1)

@@ -297,6 +297,7 @@ class EnsembleCategoricalValue(nn.Module):
         info: dict[str, torch.Tensor] = {"log_prob": log_prob}
         return value, info
 
+
 class SkillEncoderBlock(nn.Module):
     def __init__(self, skill_dim: int, obs_dim: int, hidden_dim: int, hidden_layers: int):
         super().__init__()

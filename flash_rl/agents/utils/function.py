@@ -1,10 +1,9 @@
 import torch
 
-def concat_obs_skill(
-    observations: torch.Tensor,
-    skills: torch.Tensor
-) -> torch.Tensor:
+
+def concat_obs_skill(observations: torch.Tensor, skills: torch.Tensor) -> torch.Tensor:
     return torch.cat([observations, skills], dim=-1)
+
 
 def sample_skills(
     num_envs: int,
@@ -37,9 +36,7 @@ def build_default_skills(
 ) -> torch.Tensor:
     if skill_type == "discrete":
         if default_skill_index < 0 or default_skill_index >= skill_dim:
-            raise ValueError(
-                f"default_skill_index must be in [0, {skill_dim}), got {default_skill_index}"
-            )
+            raise ValueError(f"default_skill_index must be in [0, {skill_dim}), got {default_skill_index}")
 
         skill_indices = torch.full((num_envs,), default_skill_index, dtype=torch.long, device=device)
         return torch.nn.functional.one_hot(skill_indices, num_classes=skill_dim).to(torch.float32)
@@ -73,6 +70,7 @@ def build_metra_skill_masks(skills: torch.Tensor, skill_type: str) -> torch.Tens
     mean_skill = skills.mean(dim=-1, keepdim=True)
     return (skills - mean_skill) * (skill_dim / (skill_dim - 1))
 
+
 @torch.compile
 def sample_integer_from_cdf(cdf: torch.Tensor) -> torch.Tensor:
     """
@@ -82,6 +80,7 @@ def sample_integer_from_cdf(cdf: torch.Tensor) -> torch.Tensor:
     u = torch.rand((), device=cdf.device)
     idx = torch.argmax((u < cdf).to(torch.int32))
     return (idx + 1).to(torch.int32)
+
 
 @torch.compile
 def build_truncated_zeta_cdf(mu: float, max_n: int) -> torch.Tensor:

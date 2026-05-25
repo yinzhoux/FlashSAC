@@ -1,4 +1,5 @@
 """MultiHeadedMLPModule."""
+
 import copy
 
 import torch
@@ -46,34 +47,33 @@ class MultiHeadedMLPModule(nn.Module):
 
     """
 
-    def __init__(self,
-                 n_heads,
-                 input_dim,
-                 output_dims,
-                 hidden_sizes,
-                 hidden_nonlinearity=torch.relu,
-                 hidden_w_init=nn.init.xavier_normal_,
-                 hidden_b_init=nn.init.zeros_,
-                 output_nonlinearities=None,
-                 output_w_inits=nn.init.xavier_normal_,
-                 output_b_inits=nn.init.zeros_,
-                 layer_normalization=False,
-                 bias=True,
-                 spectral_normalization=False,
-                 spectral_coef=1.,
-                 ):
+    def __init__(
+        self,
+        n_heads,
+        input_dim,
+        output_dims,
+        hidden_sizes,
+        hidden_nonlinearity=torch.relu,
+        hidden_w_init=nn.init.xavier_normal_,
+        hidden_b_init=nn.init.zeros_,
+        output_nonlinearities=None,
+        output_w_inits=nn.init.xavier_normal_,
+        output_b_inits=nn.init.zeros_,
+        layer_normalization=False,
+        bias=True,
+        spectral_normalization=False,
+        spectral_coef=1.0,
+    ):
         super().__init__()
 
         self._layers = nn.ModuleList()
 
-        output_dims = self._check_parameter_for_output_layer(
-            'output_dims', output_dims, n_heads)
-        output_w_inits = self._check_parameter_for_output_layer(
-            'output_w_inits', output_w_inits, n_heads)
-        output_b_inits = self._check_parameter_for_output_layer(
-            'output_b_inits', output_b_inits, n_heads)
+        output_dims = self._check_parameter_for_output_layer("output_dims", output_dims, n_heads)
+        output_w_inits = self._check_parameter_for_output_layer("output_w_inits", output_w_inits, n_heads)
+        output_b_inits = self._check_parameter_for_output_layer("output_b_inits", output_b_inits, n_heads)
         output_nonlinearities = self._check_parameter_for_output_layer(
-            'output_nonlinearities', output_nonlinearities, n_heads)
+            "output_nonlinearities", output_nonlinearities, n_heads
+        )
 
         self._layers = nn.ModuleList()
 
@@ -87,13 +87,13 @@ class MultiHeadedMLPModule(nn.Module):
             hidden_w_init(linear_layer.weight)
             if bias:
                 hidden_b_init(linear_layer.bias)
-            hidden_layers.add_module('linear', linear_layer)
+            hidden_layers.add_module("linear", linear_layer)
 
             if layer_normalization:
-                hidden_layers.add_module('layer_normalization', nn.LayerNorm(size))
+                hidden_layers.add_module("layer_normalization", nn.LayerNorm(size))
 
             if hidden_nonlinearity:
-                hidden_layers.add_module('non_linearity', _NonLinearity(hidden_nonlinearity))
+                hidden_layers.add_module("non_linearity", _NonLinearity(hidden_nonlinearity))
 
             self._layers.append(hidden_layers)
             prev_size = size
@@ -102,17 +102,18 @@ class MultiHeadedMLPModule(nn.Module):
         for i in range(n_heads):
             output_layer = nn.Sequential()
             if spectral_normalization:
-                linear_layer = spectral_norm(nn.Linear(prev_size, output_dims[i], bias=bias), spectral_coef=spectral_coef)
+                linear_layer = spectral_norm(
+                    nn.Linear(prev_size, output_dims[i], bias=bias), spectral_coef=spectral_coef
+                )
             else:
                 linear_layer = nn.Linear(prev_size, output_dims[i], bias=bias)
             output_w_inits[i](linear_layer.weight)
             if bias:
                 output_b_inits[i](linear_layer.bias)
-            output_layer.add_module('linear', linear_layer)
+            output_layer.add_module("linear", linear_layer)
 
             if output_nonlinearities[i]:
-                output_layer.add_module(
-                    'non_linearity', _NonLinearity(output_nonlinearities[i]))
+                output_layer.add_module("non_linearity", _NonLinearity(output_nonlinearities[i]))
 
             self._output_layers.append(output_layer)
 
@@ -138,8 +139,7 @@ class MultiHeadedMLPModule(nn.Module):
                 return list(var) * n_heads
             if len(var) == n_heads:
                 return var
-            msg = ('{} should be either an integer or a collection of length '
-                   'n_heads ({}), but {} provided.')
+            msg = "{} should be either an integer or a collection of length " "n_heads ({}), but {} provided."
             raise ValueError(msg.format(var_name, n_heads, var))
         return [copy.deepcopy(var) for _ in range(n_heads)]
 
@@ -189,8 +189,7 @@ class _NonLinearity(nn.Module):
         elif callable(non_linear):
             self.module = copy.deepcopy(non_linear)
         else:
-            raise ValueError(
-                'Non linear function {} is not supported'.format(non_linear))
+            raise ValueError("Non linear function {} is not supported".format(non_linear))
 
     # pylint: disable=arguments-differ
     def forward(self, input_value):

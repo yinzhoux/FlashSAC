@@ -296,4 +296,3 @@ class EnsembleCategoricalValue(nn.Module):
         value = torch.sum(torch.exp(log_prob) * self.bin_values, dim=-1)
         info: dict[str, torch.Tensor] = {"log_prob": log_prob}
         return value, info
-    

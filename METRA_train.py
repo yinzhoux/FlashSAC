@@ -35,7 +35,7 @@ import hydra
 import numpy as np
 import torch
 import tqdm
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from flash_rl.agents import create_agent
 from flash_rl.common import create_logger
@@ -71,6 +71,14 @@ _METRA_KEY_MAP: dict[str, str] = {
     "temperature/loss":                    "METRA/LossAlpha",
 }
 
+_ENV_TO_NORMALIZER_PRESET: dict[str, str] = {
+    "ant-v4": "ant_preset",
+    "ant": "ant_preset",
+    "halfcheetah-v4": "half_cheetah_preset",
+    "half_cheetah-v4": "half_cheetah_preset",
+    "half_cheetah": "half_cheetah_preset",
+}
+
 
 def _remap_to_metra_keys(update_info: dict) -> dict:
     """Return a new dict with official METRA metric names for easy side-by-side
@@ -90,6 +98,37 @@ def _remap_to_metra_keys(update_info: dict) -> dict:
     if "actor/entropy" in update_info:
         metra["METRA/SacpNewActionLogProbMean"] = -update_info["actor/entropy"]
     return metra
+
+
+def _resolve_obs_normalizer_type(cfg: DictConfig) -> None:
+    """Resolve official-style normalizer config into a concrete preset name.
+
+    Official METRA CLI uses ``--normalizer_type preset|off``. FlashSAC agent
+    expects ``off`` or a concrete preset key (e.g., ``ant_preset``).
+    """
+    raw_normalizer = getattr(cfg.agent, "obs_normalizer_type", "off")
+
+    if raw_normalizer in (None, False, "off"):
+        resolved = "off"
+    elif raw_normalizer in (True, "preset"):
+        env_name = str(cfg.env.env_name).strip().lower().replace(" ", "")
+        if env_name not in _ENV_TO_NORMALIZER_PRESET:
+            supported = ", ".join(sorted(_ENV_TO_NORMALIZER_PRESET.keys()))
+            raise ValueError(
+                "obs_normalizer_type='preset' requires a supported env preset. "
+                f"Got env.env_name={cfg.env.env_name!r}. Supported keys: {supported}."
+            )
+        resolved = _ENV_TO_NORMALIZER_PRESET[env_name]
+    elif isinstance(raw_normalizer, str):
+        resolved = raw_normalizer
+    else:
+        raise TypeError(
+            "agent.obs_normalizer_type must be one of: off, preset, or a preset string. "
+            f"Got type={type(raw_normalizer).__name__}, value={raw_normalizer!r}."
+        )
+
+    with open_dict(cfg.agent):
+        cfg.agent.obs_normalizer_type = resolved
 
 
 def _prune_old_checkpoints(save_path_base: str, max_checkpoints_to_keep: Optional[int]) -> None:
@@ -122,6 +161,7 @@ def run(args: argparse.Namespace) -> None:
     hydra.initialize(version_base=None, config_path=args.config_path)
     cfg = hydra.compose(config_name=args.config_name, overrides=args.overrides)
     OmegaConf.resolve(cfg)
+    _resolve_obs_normalizer_type(cfg)
 
     assert cfg.num_train_envs == 1, (
         "METRA_train.py uses sequential episode collection and requires num_train_envs=1. "
@@ -262,11 +302,13 @@ def run(args: argparse.Namespace) -> None:
 
         # ── Phase 2: trans_optimization_epochs gradient updates ───────────────
         # Buffer must have at least buffer_min_length samples first.
+        update_info = {}
         if agent.can_start_training():
             for _update_idx in range(cfg.trans_optimization_epochs):
                 update_info = agent.update()
-                logger.update_metric(**update_info)
-                logger.update_metric(**_remap_to_metra_keys(update_info))
+        if update_info:
+            logger.update_metric(**update_info)
+            logger.update_metric(**_remap_to_metra_keys(update_info))
 
         # Log per-epoch episode statistics
         logger.update_metric(**{

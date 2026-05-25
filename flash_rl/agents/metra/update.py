@@ -2,17 +2,17 @@ from typing import Any, Optional
 
 import torch
 from torch.amp.grad_scaler import GradScaler
-from .metra_config import METRAConfig
+
 from flash_rl.agents.utils.network import Network
 from flash_rl.buffers import Batch
-from .metra_comp import (
-    compute_metra_constraint,
-    compute_metra_intrinsic_reward,
-     compute_metra_reward
-)
+
+from .metra_comp import compute_metra_constraint, compute_metra_intrinsic_reward
+from .metra_config import METRAConfig
+
 
 def add_prefix_to_keys(d: dict[str, Any], prefix: str) -> dict[str, Any]:
     return {f"{prefix}/{k}": v for k, v in d.items()}
+
 
 @torch.compile
 def _select_min_q_log_probs(
@@ -321,6 +321,7 @@ def update_temperature(
 
     return update_info
 
+
 def update_skill_encoder(
     skill_encoder: Network,
     batch: dict[str, torch.Tensor],
@@ -330,20 +331,20 @@ def update_skill_encoder(
     device: torch.device,
     use_amp: bool,
     grad_scaler: Optional[GradScaler],
-    parameter_normalization: bool = False
+    parameter_normalization: bool = False,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-    raw_observations      = batch["raw_observation"]
+    raw_observations = batch["raw_observation"]
     raw_next_observations = batch["raw_next_observation"]
-    skills                = batch["skill"]
+    skills = batch["skill"]
 
     with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
         encoder_observations = torch.cat([raw_observations, raw_next_observations], dim=0)
-        encoder_features     = skill_encoder(observations=encoder_observations, training=True)
+        encoder_features = skill_encoder(observations=encoder_observations, training=True)
         current_features, next_features = torch.chunk(encoder_features, 2, dim=0)
 
         # Clone compiled outputs before reuse to avoid overwritten CUDAGraph buffers.
         current_features = current_features.clone()
-        next_features    = next_features.clone()
+        next_features = next_features.clone()
 
         intrinsic_reward, squared_distance = compute_metra_intrinsic_reward(
             current_features=current_features,
@@ -351,12 +352,9 @@ def update_skill_encoder(
             skills=skills,
             skill_type=skill_type,
         )
-        constraint_term = compute_metra_constraint(
-            squared_distance=squared_distance,
-            epsilon=constraint_epsilon
-        )
+        constraint_term = compute_metra_constraint(squared_distance=squared_distance, epsilon=constraint_epsilon)
         skill_encoder_objective = intrinsic_reward + lambda_value * constraint_term
-        skill_encoder_loss      = -skill_encoder_objective.mean()
+        skill_encoder_loss = -skill_encoder_objective.mean()
 
     assert skill_encoder.optimizer is not None
     skill_encoder.optimizer.zero_grad(set_to_none=True)
@@ -376,29 +374,30 @@ def update_skill_encoder(
         skill_encoder.normalize_parameters()
 
     update_info = {
-        "mean_objective":        skill_encoder_objective.mean(),
-        "mean_constraint":       constraint_term.mean(),
+        "mean_objective": skill_encoder_objective.mean(),
+        "mean_constraint": constraint_term.mean(),
         "mean_intrinsic_reward": intrinsic_reward.mean(),
         "mean_squared_distance": squared_distance.mean(),
     }
     update_info = {f"skill_encoder/{key}": value for key, value in update_info.items()}
     return update_info, intrinsic_reward.detach(), constraint_term.detach()
 
+
 def update_dual_lambda(
     dual_lambda: Network,
     constraint_term: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
-    
+
     with torch.no_grad():
         cst_mean = constraint_term.detach().mean()
 
-    log_lambda = dual_lambda.network.log_temp 
+    log_lambda = dual_lambda.network.log_temp
 
     dual_lambda_loss = log_lambda * cst_mean
 
     assert dual_lambda.optimizer is not None
     dual_lambda.optimizer.zero_grad(set_to_none=True)
-    
+
     dual_lambda_loss.backward()
     dual_lambda.optimizer.step()
 
@@ -408,10 +407,8 @@ def update_dual_lambda(
     with torch.no_grad():
         updated_lambda = torch.exp(log_lambda)
 
-    return {
-        "dual_lambda/loss": dual_lambda_loss.detach(),
-        "dual_lambda/value": updated_lambda.detach()
-    }
+    return {"dual_lambda/loss": dual_lambda_loss.detach(), "dual_lambda/value": updated_lambda.detach()}
+
 
 def update_policy(
     batch: dict[str, torch.Tensor],

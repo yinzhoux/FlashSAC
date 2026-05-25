@@ -40,22 +40,34 @@ class MLPModule(MultiHeadedMLPModule):
 
     """
 
-    def __init__(self,
-                 input_dim,
-                 output_dim,
-                 hidden_sizes,
-                 hidden_nonlinearity=F.relu,
-                 hidden_w_init=nn.init.xavier_normal_,
-                 hidden_b_init=nn.init.zeros_,
-                 output_nonlinearity=None,
-                 output_w_init=nn.init.xavier_normal_,
-                 output_b_init=nn.init.zeros_,
-                 layer_normalization=False,
-                 **kwargs):
-        super().__init__(1, input_dim, output_dim, hidden_sizes,
-                         hidden_nonlinearity, hidden_w_init, hidden_b_init,
-                         output_nonlinearity, output_w_init, output_b_init,
-                         layer_normalization, **kwargs)
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        hidden_sizes,
+        hidden_nonlinearity=F.relu,
+        hidden_w_init=nn.init.xavier_normal_,
+        hidden_b_init=nn.init.zeros_,
+        output_nonlinearity=None,
+        output_w_init=nn.init.xavier_normal_,
+        output_b_init=nn.init.zeros_,
+        layer_normalization=False,
+        **kwargs,
+    ):
+        super().__init__(
+            1,
+            input_dim,
+            output_dim,
+            hidden_sizes,
+            hidden_nonlinearity,
+            hidden_w_init,
+            hidden_b_init,
+            output_nonlinearity,
+            output_w_init,
+            output_b_init,
+            layer_normalization,
+            **kwargs,
+        )
 
         self._output_dim = output_dim
 

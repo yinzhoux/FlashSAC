@@ -3,8 +3,6 @@ import math
 import torch
 import torch.nn as nn
 
-from flash_rl.agents.flashSAC.encoder import GaussianSkillEncoder
-
 from flash_rl.agents.flashSAC.layer import (
     EnsembleCategoricalValue,
     EnsembleFlashSACBlock,
