@@ -224,23 +224,11 @@ class METRAAgent(BaseAgent[METRAConfig]):
         actor_observations = concat_obs_skill(observations, skills)
 
         with torch.no_grad():
-            mean, std = self._actor.apply("get_mean_and_std", observations=actor_observations, training=False)
-
             if temperature == 0.0:
+                mean, _ = self._actor.apply("get_mean_and_std", observations=actor_observations, training=False)
                 actions = torch.tanh(mean)
             else:
-                reinit = (self._curr_noise_repeat_cnt == 0) | (self._curr_noise_repeat_cnt >= self._curr_noise_repeat_n)
-                new_noise = torch.randn_like(mean)
-                new_n = sample_integer_from_cdf(self._zeta_cdf)
-
-                # update noise info if need
-                self._curr_noise = torch.where(reinit, new_noise, self._curr_noise)
-                self._curr_noise_repeat_n = torch.where(reinit, new_n, self._curr_noise_repeat_n)
-                self._curr_noise_repeat_cnt = torch.where(
-                    reinit, torch.zeros_like(self._curr_noise_repeat_cnt), self._curr_noise_repeat_cnt
-                )
-
-                actions = torch.tanh(mean + std * self._curr_noise * temperature)
+                actions, _ = self._actor(observations=actor_observations, training=True)
 
         return actions.cpu().numpy()
 

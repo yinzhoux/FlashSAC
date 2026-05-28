@@ -113,7 +113,7 @@ class NormalTanhPolicy(nn.Module):
         self,
         hidden_dim: int,
         action_dim: int,
-        log_std_min: float = -10.0,
+        log_std_min: float = -5.0,
         log_std_max: float = 2.0,
     ):
         super().__init__()

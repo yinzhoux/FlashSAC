@@ -90,3 +90,5 @@ class METRAConfig:
     default_skill_index: int
 
     obs_normalizer_type: str  # 'off' or 'preset' (e.g. ant_preset, half_cheetah_preset)
+    actor_type: str = "flash"
+    critic_type: str = "categorical"

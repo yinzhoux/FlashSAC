@@ -1,7 +1,7 @@
 import torch
 import torch.optim as optim
 
-from flash_rl.agents.metra.network import FlashSACActor, FlashSACDoubleCritic, FlashSACTemperature
+from flash_rl.agents.metra.network import FlashSACActor, FlashSACDoubleCritic, FlashSACTemperature, MLPGaussianActor, ScalarDoubleCritic
 from flash_rl.agents.utils.function import build_metra_skill_masks
 from flash_rl.agents.utils.network import Network
 from flash_rl.agents.utils.scheduler import warmup_cosine_decay_scheduler
@@ -51,12 +51,20 @@ def init_metra_networks(
     device: torch.device,
 ) -> tuple[Network, Network, Network, Network, Network, Network]:
     # ========================== Initialize actor ==========================
-    actor_net = FlashSACActor(
-        num_blocks=cfg.actor_num_blocks,
-        input_dim=actor_observation_dim,
-        hidden_dim=cfg.actor_hidden_dim,
-        action_dim=action_dim,
-    ).to(device)
+    if cfg.actor_type == "mlp_gaussian":
+        actor_net = MLPGaussianActor(
+            num_layers=cfg.actor_num_blocks,
+            input_dim=actor_observation_dim,
+            hidden_dim=cfg.actor_hidden_dim,
+            action_dim=action_dim,
+        ).to(device)
+    else:
+        actor_net = FlashSACActor(
+            num_blocks=cfg.actor_num_blocks,
+            input_dim=actor_observation_dim,
+            hidden_dim=cfg.actor_hidden_dim,
+            action_dim=action_dim,
+        ).to(device)
 
     use_fused = device.type == "cuda" and torch.cuda.is_available()
 
@@ -84,14 +92,22 @@ def init_metra_networks(
         actor.network.get_mean_and_std = torch.compile(actor.network.get_mean_and_std, mode=cfg.compile_mode)  # type: ignore
 
     # ========================== Initialize critic ==========================
-    critic_net = FlashSACDoubleCritic(
-        num_blocks=cfg.critic_num_blocks,
-        input_dim=critic_observation_dim + action_dim,
-        hidden_dim=cfg.critic_hidden_dim,
-        num_bins=cfg.critic_num_bins,
-        min_v=cfg.critic_min_v,
-        max_v=cfg.critic_max_v,
-    ).to(device)
+    if cfg.critic_type == "scalar":
+        critic_net = ScalarDoubleCritic(
+            input_dim=critic_observation_dim,
+            hidden_dim=cfg.critic_hidden_dim,
+            num_layers=cfg.critic_num_blocks,
+            action_dim=action_dim,
+        ).to(device)
+    else:
+        critic_net = FlashSACDoubleCritic(
+            num_blocks=cfg.critic_num_blocks,
+            input_dim=critic_observation_dim + action_dim,
+            hidden_dim=cfg.critic_hidden_dim,
+            num_bins=cfg.critic_num_bins,
+            min_v=cfg.critic_min_v,
+            max_v=cfg.critic_max_v,
+        ).to(device)
 
     critic_optimizer, critic_scheduler = gen_optimizer(
         parameters=critic_net.parameters(),
@@ -114,14 +130,22 @@ def init_metra_networks(
     )
 
     # ========================== Initialize target critic (same as critic but no optimizer) ==========================
-    target_critic_net = FlashSACDoubleCritic(
-        num_blocks=cfg.critic_num_blocks,
-        input_dim=critic_observation_dim + action_dim,
-        hidden_dim=cfg.critic_hidden_dim,
-        num_bins=cfg.critic_num_bins,
-        min_v=cfg.critic_min_v,
-        max_v=cfg.critic_max_v,
-    ).to(device)
+    if cfg.critic_type == "scalar":
+        target_critic_net = ScalarDoubleCritic(
+            input_dim=critic_observation_dim,
+            hidden_dim=cfg.critic_hidden_dim,
+            num_layers=cfg.critic_num_blocks,
+            action_dim=action_dim,
+        ).to(device)
+    else:
+        target_critic_net = FlashSACDoubleCritic(
+            num_blocks=cfg.critic_num_blocks,
+            input_dim=critic_observation_dim + action_dim,
+            hidden_dim=cfg.critic_hidden_dim,
+            num_bins=cfg.critic_num_bins,
+            min_v=cfg.critic_min_v,
+            max_v=cfg.critic_max_v,
+        ).to(device)
     target_critic_net.load_state_dict(critic_net.state_dict())
     target_critic = Network(
         network=target_critic_net,

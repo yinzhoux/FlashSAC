@@ -49,10 +49,14 @@ class METRATorchBuffer(BaseBuffer):
         m = self._max_length
         pin = self._device.type == "cpu" and torch.cuda.is_available()
 
-        observation_shape = (self._observation_space.shape[-1],) if self._observation_space.shape is not None else (0,)
-        observation_dtype = _numpy_dtype_to_torch(
-            self._observation_space.dtype if self._observation_space.dtype is not None else np.float32
-        )
+        if self._observation_space:
+            observation_shape = (self._observation_space.shape[-1],) if self._observation_space.shape is not None else (0,)
+            observation_dtype = _numpy_dtype_to_torch(
+                self._observation_space.dtype if self._observation_space.dtype is not None else np.float32
+            )
+        else:
+            observation_shape = (29, )
+            observation_dtype = _numpy_dtype_to_torch(np.float32)
 
         action_shape = (self._action_space.shape[-1],) if self._action_space.shape is not None else (0,)
         action_dtype = _numpy_dtype_to_torch(

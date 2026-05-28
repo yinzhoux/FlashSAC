@@ -181,6 +181,7 @@ def update_critic(
     device: torch.device,
     use_amp: bool,
     grad_scaler: Optional[GradScaler],
+    critic_type: str,
 ) -> dict[str, torch.Tensor]:
     """Update critic network.
 
@@ -207,50 +208,54 @@ def update_critic(
                 observations=batch["actor_next_observation"],
                 training=False,
             )
-            # Clone variables to prevent overwriting
             next_actions = next_actions.clone()
             next_actor_log_probs = info["log_prob"].clone()
 
             temp_value = temperature()
-
             next_actor_entropy = temp_value * next_actor_log_probs
             obs_all = torch.cat([batch["observation"], batch["next_observation"]], dim=0)  # type: ignore
             act_all = torch.cat([batch["action"], next_actions], dim=0)  # type: ignore
 
-            # qs_all: (2, 2*B)
-            # q_infos_all['log_probs']: (2, 2*B, num_bins)
             qs_all, q_infos_all = target_critic(
                 observations=obs_all,
                 actions=act_all,
                 training=True,
             )
-            next_qs = qs_all.chunk(2, dim=1)[1]
-            next_q_log_probs = q_infos_all["log_prob"].chunk(2, dim=1)[1]
-            next_q_log_probs = _select_min_q_log_probs(next_qs, next_q_log_probs)
 
-            # Compute target probs
-            target_probs = _compute_categorical_td_target(
-                target_log_probs=next_q_log_probs,
-                reward=batch["reward"],  # type: ignore
-                done=batch["terminated"],  # type: ignore
-                actor_entropy=next_actor_entropy,
-                gamma=gamma**n_step,
-                num_bins=num_bins,
-                min_v=min_v,
-                max_v=max_v,
-            )
-            max_entropy_bonus = next_actor_entropy.max()
+            if critic_type == "scalar":
+                next_qs = qs_all.chunk(2, dim=1)[1]
+                target_q = torch.minimum(next_qs[0], next_qs[1]) - next_actor_entropy
+                target_q = batch["reward"] + (gamma**n_step) * target_q * (1.0 - batch["terminated"])  # type: ignore
+                max_entropy_bonus = next_actor_entropy.max()
+            else:
+                next_q_log_probs = q_infos_all["log_prob"].chunk(2, dim=1)[1]
+                next_q_log_probs = _select_min_q_log_probs(next_qs, next_q_log_probs)
 
-        # Compute predicted q-value
+                target_probs = _compute_categorical_td_target(
+                    target_log_probs=next_q_log_probs,
+                    reward=batch["reward"],  # type: ignore
+                    done=batch["terminated"],  # type: ignore
+                    actor_entropy=next_actor_entropy,
+                    gamma=gamma**n_step,
+                    num_bins=num_bins,
+                    min_v=min_v,
+                    max_v=max_v,
+                )
+                max_entropy_bonus = next_actor_entropy.max()
+
         pred_qs_all, pred_q_infos = critic(
             observations=obs_all,
             actions=act_all,
             training=True,
         )
-        pred_log_probs = torch.chunk(pred_q_infos["log_prob"], 2, dim=1)[0]
 
-        ce_loss = -(target_probs.unsqueeze(0) * pred_log_probs).sum(dim=-1)  # (2, B)
-        critic_loss = ce_loss.mean()
+        if critic_type == "scalar":
+            pred_qs = pred_qs_all.chunk(2, dim=1)[0]
+            critic_loss = ((pred_qs - target_q.unsqueeze(0)) ** 2).mean()
+        else:
+            pred_log_probs = torch.chunk(pred_q_infos["log_prob"], 2, dim=1)[0]
+            ce_loss = -(target_probs.unsqueeze(0) * pred_log_probs).sum(dim=-1)  # (2, B)
+            critic_loss = ce_loss.mean()
 
     # Gradient step
     assert critic.optimizer is not None
@@ -459,6 +464,7 @@ def update_policy(
         device=device,
         use_amp=cfg.use_amp,
         grad_scaler=grad_scaler,
+        critic_type=cfg.critic_type,
     )
 
     target_critic_info = update_target_network(

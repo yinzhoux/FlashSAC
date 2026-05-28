@@ -26,6 +26,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 
 from flash_rl.agents import create_agent
 from flash_rl.envs import create_vec_env
+from flash_rl.envs.envs.mujoco.ant_env import AntEnv
 from flash_rl.types import Tensor
 
 
@@ -382,7 +383,7 @@ def _rollout_one_skill(
     frame_count = 0
 
     if frame_dir is not None:
-        render_frames = _extract_frames(env.render(), num_envs=1)  # type: ignore[call-arg]
+        render_frames = _extract_frames(env.render(mode="rgb_array"), num_envs=1)  # type: ignore[call-arg]
         if render_frames:
             _write_rollout_frame(frame_dir, frame_count, render_frames[0])
             frame_count += 1
@@ -391,15 +392,19 @@ def _rollout_one_skill(
     steps = 0
     while not done and steps < max_episode_steps:
         actions = np.asarray(agent.sample_actions(interaction_step=0, prev_transition=prev_transition, training=False))
+        if actions.ndim == 2 and actions.shape[0] == 1:
+            actions = actions[0]
         next_observations, _, terminateds, truncateds, _ = env.step(actions)
-        done = bool(terminateds[0] or truncateds[0])
+        terminated = bool(np.asarray(terminateds).reshape(-1)[0])
+        truncated = bool(np.asarray(truncateds).reshape(-1)[0])
+        done = terminated or truncated
 
         last_observation = np.asarray(next_observations[0], dtype=np.float32).copy()
         coordinates.append(_extract_coordinates(env, env_name, last_observation))
         prev_transition = {"next_observation": next_observations}
 
         if frame_dir is not None:
-            render_frames = _extract_frames(env.render(), num_envs=1)  # type: ignore[call-arg]
+            render_frames = _extract_frames(env.render(mode="rgb_array"), num_envs=1)  # type: ignore[call-arg]
             if render_frames:
                 _write_rollout_frame(frame_dir, frame_count, render_frames[0])
                 frame_count += 1
@@ -611,9 +616,10 @@ def run(args: argparse.Namespace) -> None:
 
     _seed_everything(int(cfg.seed))
 
+    setup_env = None
     record_env = None
     try:
-        record_env = create_vec_env(
+        setup_env = create_vec_env(
             env_type=cfg.env.env_type,
             env_name=cfg.env.env_name,
             num_envs=1,
@@ -621,9 +627,9 @@ def run(args: argparse.Namespace) -> None:
             rescale_action=cfg.env.rescale_action,
             max_episode_steps=cfg.env.max_episode_steps,
         )
-        observation_space = record_env.observation_space
-        action_space = record_env.action_space
-        _, env_info = record_env.reset()
+        observation_space = setup_env.observation_space
+        action_space = setup_env.action_space
+        _, env_info = setup_env.reset()
 
         agent = create_agent(
             observation_space=observation_space,
@@ -632,6 +638,12 @@ def run(args: argparse.Namespace) -> None:
             cfg=cfg.agent,
         )
         agent.load(args.checkpoint_path)
+
+        # Use the official-style METRA MuJoCo Ant env for evaluation rollouts.
+        if str(cfg.env.env_name).lower() == "ant-v4":
+            record_env = AntEnv(render_hw=100)
+        else:
+            record_env = setup_env
 
         timestamp = datetime.now().strftime("%m%d-%H%M%S")
         run_name = args.run_name or f"{Path(args.checkpoint_path).name}_{timestamp}"
@@ -651,6 +663,8 @@ def run(args: argparse.Namespace) -> None:
 
         print(f"Saved evaluation artifacts to: {output_dir}")
     finally:
+        if setup_env is not None and setup_env is not record_env:
+            setup_env.close()
         if record_env is not None:
             record_env.close()
 

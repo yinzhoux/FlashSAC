@@ -2,6 +2,7 @@ import math
 
 import torch
 import torch.nn as nn
+from flash_rl.agents.utils.distribution import safe_tanh_log_det_jacobian
 
 from flash_rl.agents.metra.layer import (
     EnsembleCategoricalValue,
@@ -59,6 +60,70 @@ class FlashSACActor(nn.Module):
         return actions, info
 
 
+class MLPGaussianActor(nn.Module):
+    """Official-style Gaussian MLP actor with tanh squashing."""
+
+    def __init__(
+        self,
+        num_layers: int,
+        input_dim: int,
+        hidden_dim: int,
+        action_dim: int,
+        log_std_min: float = -5.0,
+        log_std_max: float = 2.0,
+    ):
+        super().__init__()
+        if num_layers < 1:
+            raise ValueError("num_layers must be >= 1")
+
+        layers: list[nn.Module] = []
+        in_dim = input_dim
+        for _ in range(num_layers):
+            linear = nn.Linear(in_dim, hidden_dim)
+            nn.init.xavier_uniform_(linear.weight)
+            nn.init.zeros_(linear.bias)
+            layers.extend([linear, nn.ReLU()])
+            in_dim = hidden_dim
+        self.backbone = nn.Sequential(*layers)
+
+        self.mean = nn.Linear(hidden_dim, action_dim)
+        self.log_std = nn.Linear(hidden_dim, action_dim)
+        nn.init.xavier_uniform_(self.mean.weight)
+        nn.init.zeros_(self.mean.bias)
+        nn.init.xavier_uniform_(self.log_std.weight)
+        nn.init.zeros_(self.log_std.bias)
+
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+
+    def get_mean_and_std(
+        self,
+        observations: torch.Tensor,
+        training: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        del training
+        hidden = self.backbone(observations)
+        mean = self.mean(hidden)
+        raw_log_std = self.log_std(hidden)
+        log_std = self.log_std_min + (self.log_std_max - self.log_std_min) * 0.5 * (1 + torch.tanh(raw_log_std))
+        std = torch.exp(log_std)
+        return mean, std
+
+    def forward(
+        self,
+        observations: torch.Tensor,
+        training: bool,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        mean, std = self.get_mean_and_std(observations, training)
+        dist = torch.distributions.Normal(mean, std)
+        raw_action = dist.rsample()
+        action = torch.tanh(raw_action)
+        log_prob = dist.log_prob(raw_action)
+        log_prob = log_prob - safe_tanh_log_det_jacobian(raw_action)
+        log_prob = log_prob.sum(dim=1)
+        return action, {"log_prob": log_prob}
+
+
 class FlashSACDoubleCritic(nn.Module):
     """
     Double-Q for Clipped Double Q-learning.
@@ -106,6 +171,46 @@ class FlashSACDoubleCritic(nn.Module):
         x = self.post_norm(x)
         qs, infos = self.predictor(x, training)
         return qs, infos
+
+
+class ScalarDoubleCritic(nn.Module):
+    """Official-style scalar twin-Q critic for METRA ablations."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        num_layers: int,
+        action_dim: int,
+        num_qs: int = 2,
+    ):
+        super().__init__()
+        self.num_qs = num_qs
+
+        def build_q() -> nn.Sequential:
+            layers: list[nn.Module] = [nn.Linear(input_dim + action_dim, hidden_dim), nn.ReLU()]
+            for _ in range(num_layers - 1):
+                layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.ReLU()])
+            layers.append(nn.Linear(hidden_dim, 1))
+            net = nn.Sequential(*layers)
+            for module in net.modules():
+                if isinstance(module, nn.Linear):
+                    nn.init.xavier_uniform_(module.weight)
+                    nn.init.zeros_(module.bias)
+            return net
+
+        self.q_nets = nn.ModuleList([build_q() for _ in range(num_qs)])
+
+    def forward(
+        self,
+        observations: torch.Tensor,
+        actions: torch.Tensor,
+        training: bool,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        del training
+        critic_input = torch.cat((observations, actions), dim=-1)
+        qs = [q_net(critic_input).squeeze(-1) for q_net in self.q_nets]
+        return torch.stack(qs, dim=0), {}
 
 
 class FlashSACTemperature(nn.Module):
