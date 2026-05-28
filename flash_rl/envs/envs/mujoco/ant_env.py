@@ -25,7 +25,7 @@ def q_mult(a, b):  # multiply two quaternion
     return [w, i, j, k]
 
 def _apply_normalize_obs(obs, mean, var):
-    normalized_obs = (obs - mean) / (np.sqrt(var) + 1e-8)
+    normalized_obs = (obs - mean) / ((var) + 1e-8)
     return normalized_obs.astype(np.float32)
 
 normalizer_mean = np.array(
