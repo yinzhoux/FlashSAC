@@ -1,482 +1,188 @@
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import torch
-from torch.amp.grad_scaler import GradScaler
-
-from flash_rl.agents.utils.network import Network
-from flash_rl.buffers import Batch
-
-from .metra_comp import compute_metra_constraint, compute_metra_intrinsic_reward
-from .metra_config import METRAConfig
-
-
-def add_prefix_to_keys(d: dict[str, Any], prefix: str) -> dict[str, Any]:
-    return {f"{prefix}/{k}": v for k, v in d.items()}
-
-
-@torch.compile
-def _select_min_q_log_probs(
-    next_qs: torch.Tensor,  # (2, B)
-    next_q_log_probs: torch.Tensor,  # (2, B, num_bins)
-) -> torch.Tensor:
-    """Select log-probs from the min-Q critic and return the next-obs half (batch, num_bins)."""
-    num_bins = next_q_log_probs.shape[-1]
-    min_indices = next_qs.argmin(dim=0)  # (B,)
-    selected = torch.gather(
-        next_q_log_probs,
-        dim=0,
-        index=min_indices[None, :, None].expand(1, -1, num_bins),
-    )[
-        0
-    ]  # (B, num_bins)
-    return selected
-
-
-@torch.compile
-def _compute_categorical_td_target(
-    target_log_probs: torch.Tensor,  # (B, num_bins)
-    reward: torch.Tensor,  # (B,)
-    done: torch.Tensor,  # (B,)
-    actor_entropy: torch.Tensor,  # (B,)
-    gamma: float,
-    num_bins: int,
-    min_v: float,
-    max_v: float,
-) -> torch.Tensor:
-    batch_size = reward.shape[0]
-
-    reward = reward.reshape(-1, 1)
-    done = done.reshape(-1, 1)
-    actor_entropy = actor_entropy.reshape(-1, 1)
-
-    # Compute target value buckets
-    bin_width = (max_v - min_v) / (num_bins - 1)
-    bin_values = torch.linspace(
-        min_v, max_v, num_bins, device=target_log_probs.device, dtype=target_log_probs.dtype
-    ).view(1, -1)
-
-    # target_bin_values
-    target_bin_values = reward + gamma * (bin_values - actor_entropy) * (1.0 - done)
-    target_bin_values = torch.clamp(target_bin_values, min_v, max_v)
-
-    # update indices
-    b = (target_bin_values - min_v) / bin_width
-    lower = torch.floor(b).long()
-    upper = torch.clamp(lower + 1, 0, num_bins - 1)
-
-    frac = b - lower.float()
-
-    # Compute target probabilities using exp
-    target_probs_exp = target_log_probs.exp()
-    m_l = target_probs_exp * (1.0 - frac)
-    m_u = target_probs_exp * frac
-
-    # Allocate output tensor
-    target_probs = torch.zeros(batch_size, num_bins, dtype=target_probs_exp.dtype, device=target_probs_exp.device)
-
-    # Scatter operations
-    target_probs.scatter_add_(1, lower, m_l)
-    target_probs.scatter_add_(1, upper, m_u)
-
-    return target_probs
-
-
-def update_actor(
-    actor: Network,
-    critic: Network,
-    temperature: Network,
-    batch: Batch,
-    bc_alpha: float,
-    device: torch.device,
-    use_amp: bool,
-    grad_scaler: Optional[GradScaler],
-) -> dict[str, torch.Tensor]:
-    """Update actor network.
-
-    Args:
-        actor: Actor network.
-        critic: Critic network.
-        temperature: Temperature network.
-        batch: Batch of transitions.
-        bc_alpha: BC regularization coefficient.
-        device: Device to use.
-        use_amp: Whether to use automatic mixed precision.
-        grad_scaler: GradScaler for FP16 AMP.
-    """
-
-    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
-        actor_obs_all = torch.cat([batch["actor_observation"], batch["actor_next_observation"]], dim=0)  # type: ignore
-        actions_all, info = actor(
-            observations=actor_obs_all,
-            training=True,
-        )
-        log_probs_all = info["log_prob"]
-
-        actions = torch.chunk(actions_all, 2, dim=0)[0]
-        log_probs = torch.chunk(log_probs_all, 2, dim=0)[0]
-
-        # Disable critic gradients to prevent CUDA graph overwriting
-        critic.network.requires_grad_(False)
-        qs, q_infos = critic(
-            observations=batch["observation"],
-            actions=actions,
-            training=False,
-        )
-        q = torch.minimum(qs[0], qs[1])
-        critic.network.requires_grad_(True)
-
-        temp_value = temperature().detach()
-        actor_loss = (log_probs * temp_value - q).mean()
-
-        if bc_alpha > 0:
-            # https://arxiv.org/abs/2306.02451
-            q_abs = torch.abs(q).mean().detach()
-            bc_loss = ((actions - batch["action"]) ** 2).mean()
-            actor_loss = actor_loss + bc_alpha * q_abs * bc_loss
-
-        entropy = -log_probs.mean()
-        mean_action = actions.mean()
-
-    # Gradient step
-    assert actor.optimizer is not None
-    actor.optimizer.zero_grad(set_to_none=True)
-    if use_amp:
-        assert grad_scaler is not None
-        grad_scaler.scale(actor_loss).backward()
-        grad_scaler.step(actor.optimizer)
-        grad_scaler.update()
-    else:
-        actor_loss.backward()
-        actor.optimizer.step()
-
-    # LR scheduler
-    if actor.scheduler is not None:
-        actor.scheduler.step()
-
-    # Weight Normalization
-    # NOTE: Make sure you finish all computation before this (e.g., computing info values)
-    actor.normalize_parameters()
-
-    update_info = {
-        "loss": actor_loss,
-        "entropy": entropy,
-        "mean_action": mean_action,
-    }
-    update_info = add_prefix_to_keys(update_info, "actor")
-
-    return update_info
-
-
-def update_critic(
-    actor: Network,
-    critic: Network,
-    target_critic: Network,
-    temperature: Network,
-    batch: Batch,
-    min_v: float,
-    max_v: float,
-    num_bins: int,
-    gamma: float,
-    n_step: int,
-    device: torch.device,
-    use_amp: bool,
-    grad_scaler: Optional[GradScaler],
-    critic_type: str,
-) -> dict[str, torch.Tensor]:
-    """Update critic network.
-
-    Args:
-        actor: Actor network.
-        critic: Critic network.
-        target_critic: Target critic network.
-        temperature: Temperature network.
-        batch: Batch of transitions.
-        min_v: Minimum value for categorical distribution.
-        max_v: Maximum value for categorical distribution.
-        num_bins: Number of bins for categorical distribution.
-        gamma: Discount factor.
-        n_step: N-step return.
-        device: Device to use.
-        use_amp: Whether to use automatic mixed precision.
-        grad_scaler: GradScaler for FP16 AMP.
-    """
-
-    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
-        # Compute target values
-        with torch.no_grad():
-            next_actions, info = actor(
-                observations=batch["actor_next_observation"],
-                training=False,
-            )
-            next_actions = next_actions.clone()
-            next_actor_log_probs = info["log_prob"].clone()
-
-            temp_value = temperature()
-            next_actor_entropy = temp_value * next_actor_log_probs
-            obs_all = torch.cat([batch["observation"], batch["next_observation"]], dim=0)  # type: ignore
-            act_all = torch.cat([batch["action"], next_actions], dim=0)  # type: ignore
-
-            qs_all, q_infos_all = target_critic(
-                observations=obs_all,
-                actions=act_all,
-                training=True,
-            )
-
-            if critic_type == "scalar":
-                next_qs = qs_all.chunk(2, dim=1)[1]
-                target_q = torch.minimum(next_qs[0], next_qs[1]) - next_actor_entropy
-                target_q = batch["reward"] + (gamma**n_step) * target_q * (1.0 - batch["terminated"])  # type: ignore
-                max_entropy_bonus = next_actor_entropy.max()
-            else:
-                next_q_log_probs = q_infos_all["log_prob"].chunk(2, dim=1)[1]
-                next_q_log_probs = _select_min_q_log_probs(next_qs, next_q_log_probs)
-
-                target_probs = _compute_categorical_td_target(
-                    target_log_probs=next_q_log_probs,
-                    reward=batch["reward"],  # type: ignore
-                    done=batch["terminated"],  # type: ignore
-                    actor_entropy=next_actor_entropy,
-                    gamma=gamma**n_step,
-                    num_bins=num_bins,
-                    min_v=min_v,
-                    max_v=max_v,
-                )
-                max_entropy_bonus = next_actor_entropy.max()
-
-        pred_qs_all, pred_q_infos = critic(
-            observations=obs_all,
-            actions=act_all,
-            training=True,
-        )
-
-        if critic_type == "scalar":
-            pred_qs = pred_qs_all.chunk(2, dim=1)[0]
-            critic_loss = ((pred_qs - target_q.unsqueeze(0)) ** 2).mean()
-        else:
-            pred_log_probs = torch.chunk(pred_q_infos["log_prob"], 2, dim=1)[0]
-            ce_loss = -(target_probs.unsqueeze(0) * pred_log_probs).sum(dim=-1)  # (2, B)
-            critic_loss = ce_loss.mean()
-
-    # Gradient step
-    assert critic.optimizer is not None
-    critic.optimizer.zero_grad(set_to_none=True)
-    if use_amp:
-        assert grad_scaler is not None
-        grad_scaler.scale(critic_loss).backward()  # type: ignore
-        grad_scaler.step(critic.optimizer)
-        grad_scaler.update()
-    else:
-        critic_loss.backward()  # type: ignore
-        critic.optimizer.step()
-
-    # LR scheduler
-    if critic.scheduler is not None:
-        critic.scheduler.step()
-
-    # Weight Normalization
-    critic.normalize_parameters()
-
-    update_info = {
-        "loss": critic_loss,
-        "max_entropy_bonus": max_entropy_bonus,
-    }
-    update_info = add_prefix_to_keys(update_info, "critic")
-
-    return update_info
-
-
-@torch.no_grad()
-def update_target_network(
-    target_network: Network,
-) -> dict[str, torch.Tensor]:
-    # Use prepared/compiled EMA function for update
-    target_network.ema_update_parameters()
-    info: dict[str, torch.Tensor] = {}
-    return info
-
-
-def update_temperature(
-    temperature: Network,
-    entropy: torch.Tensor,
-    target_entropy: float,
-) -> dict[str, torch.Tensor]:
-    """Update temperature network.
-
-    Args:
-        temperature: Temperature network.
-        entropy: Current entropy value.
-        target_entropy: Target entropy value.
-    """
-
-    temperature_value = temperature().clone()
-    temperature_loss = temperature_value * (entropy.detach() - target_entropy).mean()
-
-    assert temperature.optimizer is not None
-    temperature.optimizer.zero_grad(set_to_none=True)
-    temperature_loss.backward()
-    temperature.optimizer.step()
-    if temperature.scheduler is not None:
-        temperature.scheduler.step()
-
-    update_info = {
-        "value": temperature_value,
-        "loss": temperature_loss,
-    }
-    update_info = add_prefix_to_keys(update_info, "temperature")
-
-    return update_info
-
-
-def update_skill_encoder(
-    skill_encoder: Network,
-    batch: dict[str, torch.Tensor],
-    constraint_epsilon: float,
-    lambda_value: float,
-    skill_type: str,
-    device: torch.device,
-    use_amp: bool,
-    grad_scaler: Optional[GradScaler],
-    parameter_normalization: bool = False,
-) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-    raw_observations = batch["raw_observation"]
-    raw_next_observations = batch["raw_next_observation"]
-    skills = batch["skill"]
-
-    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
-        encoder_observations = torch.cat([raw_observations, raw_next_observations], dim=0)
-        encoder_features = skill_encoder(observations=encoder_observations, training=True)
-        current_features, next_features = torch.chunk(encoder_features, 2, dim=0)
-
-        # Clone compiled outputs before reuse to avoid overwritten CUDAGraph buffers.
-        current_features = current_features.clone()
-        next_features = next_features.clone()
-
-        intrinsic_reward, squared_distance = compute_metra_intrinsic_reward(
-            current_features=current_features,
-            next_features=next_features,
-            skills=skills,
-            skill_type=skill_type,
-        )
-        constraint_term = compute_metra_constraint(squared_distance=squared_distance, epsilon=constraint_epsilon)
-        skill_encoder_objective = intrinsic_reward + lambda_value * constraint_term
-        skill_encoder_loss = -skill_encoder_objective.mean()
-
-    assert skill_encoder.optimizer is not None
-    skill_encoder.optimizer.zero_grad(set_to_none=True)
-    if use_amp:
-        assert grad_scaler is not None
-        grad_scaler.scale(skill_encoder_loss).backward()
-        grad_scaler.step(skill_encoder.optimizer)
-        grad_scaler.update()
-    else:
-        skill_encoder_loss.backward()
-        skill_encoder.optimizer.step()
-
-    if skill_encoder.scheduler is not None:
-        skill_encoder.scheduler.step()
-
-    if parameter_normalization:
-        skill_encoder.normalize_parameters()
-
-    update_info = {
-        "mean_objective": skill_encoder_objective.mean(),
-        "mean_constraint": constraint_term.mean(),
-        "mean_intrinsic_reward": intrinsic_reward.mean(),
-        "mean_squared_distance": squared_distance.mean(),
-    }
-    update_info = {f"skill_encoder/{key}": value for key, value in update_info.items()}
-    return update_info, intrinsic_reward.detach(), constraint_term.detach()
-
-
-def update_dual_lambda(
-    dual_lambda: Network,
-    constraint_term: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-
-    with torch.no_grad():
-        cst_mean = constraint_term.detach().mean()
-
-    log_lambda = dual_lambda.network.log_temp
-
-    dual_lambda_loss = log_lambda * cst_mean
-
-    assert dual_lambda.optimizer is not None
-    dual_lambda.optimizer.zero_grad(set_to_none=True)
-
-    dual_lambda_loss.backward()
-    dual_lambda.optimizer.step()
-
-    if dual_lambda.scheduler is not None:
-        dual_lambda.scheduler.step()
-
-    with torch.no_grad():
-        updated_lambda = torch.exp(log_lambda)
-
-    return {"dual_lambda/loss": dual_lambda_loss.detach(), "dual_lambda/value": updated_lambda.detach()}
-
-
-def update_policy(
-    batch: dict[str, torch.Tensor],
-    actor: Network,
-    critic: Network,
-    target_critic: Network,
-    temperature: Network,
-    cfg: METRAConfig,
-    do_actor_update: bool,
-    device: torch.device,
-    grad_scaler: Optional[GradScaler],
-):
-    if do_actor_update:
-        # Update actor
-        actor_info = update_actor(
-            actor=actor,
-            critic=critic,
-            temperature=temperature,
-            batch=batch,  # type: ignore
-            bc_alpha=cfg.actor_bc_alpha,
-            device=device,
-            use_amp=cfg.use_amp,
-            grad_scaler=grad_scaler,
-        )
-
-        # Update temperature
-        temperature_info = update_temperature(
-            temperature=temperature,
-            entropy=actor_info["actor/entropy"],
-            target_entropy=cfg.temp_target_entropy,
-        )
-    else:
-        actor_info = {}
-        temperature_info = {}
-
-    # Update critic
-    critic_info = update_critic(
-        actor=actor,  # updated
-        critic=critic,
-        target_critic=target_critic,
-        temperature=temperature,  # updated
-        batch=batch,  # type: ignore
-        min_v=cfg.critic_min_v,
-        max_v=cfg.critic_max_v,
-        num_bins=cfg.critic_num_bins,
-        gamma=cfg.gamma,
-        n_step=cfg.n_step,
-        device=device,
-        use_amp=cfg.use_amp,
-        grad_scaler=grad_scaler,
-        critic_type=cfg.critic_type,
-    )
-
-    target_critic_info = update_target_network(
-        target_network=target_critic,
-    )
-
-    # Merge all info dicts
-    update_info = {
-        **actor_info,
-        **critic_info,
-        **target_critic_info,
-        **temperature_info,
-    }
-
-    return update_info
+from .agent import METRAAgent
+
+def move_batch_to_device(batch, device: torch.device):
+	return {
+		key: value.to(device=device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+		for key, value in batch.items()
+	}
+
+def update_skill_rewards(state: METRAAgent, data, training_info):
+	obs = data["observation"]
+	next_obs = data["next_observation"]
+
+	cur_z = state.skill_encoder(obs).mean
+	next_z = state.skill_encoder(next_obs).mean
+	target_z = next_z - cur_z
+
+	rewards = (target_z * data["skill"]).sum(dim=1)
+
+	training_info.update({
+		"cur_z": cur_z,
+		"next_z": next_z,
+	})
+	data["reward"] = rewards
+
+
+def update_loss_te(state: METRAAgent, data, training_info):
+	update_skill_rewards(state, data, training_info)
+
+	rewards = data["reward"]
+	obs = data["observation"]
+	next_obs = data["next_observation"]
+
+	lambda_value = state.dual_lam.param.exp()
+	phi_x = training_info["cur_z"]
+	phi_y = training_info["next_z"]
+
+	cst_dist = torch.ones_like(obs[:, 0])
+	square_dist = torch.square(phi_y - phi_x).mean(dim=1)
+	cst_penalty = cst_dist - square_dist
+	cst_penalty = torch.clamp(cst_penalty, max=state.cfg.dual_slack)
+
+	te_obj = rewards + lambda_value.detach() * cst_penalty
+	loss_te = -te_obj.mean()
+
+	training_info.update({
+		"cst_penalty": cst_penalty,
+		"square_dist": square_dist,
+		"loss_te": loss_te,
+	})
+
+
+def update_loss_dual_lam(state: METRAAgent, training_info):
+	log_dual_lam = state.dual_lam.param
+	dual_lam_value = log_dual_lam.exp()
+	loss_dual_lam = log_dual_lam * training_info["cst_penalty"].detach().mean()
+	training_info.update({
+		"dual_lam": dual_lam_value,
+		"loss_dual_lam": loss_dual_lam,
+	})
+
+
+def optimize_te(state: METRAAgent, data, training_info):
+	update_loss_te(state, data, training_info)
+
+	state.optimizers["traj_encoder"].zero_grad()
+	training_info["loss_te"].backward()
+	state.optimizers["traj_encoder"].step()
+
+	update_loss_dual_lam(state, training_info)
+	state.optimizers["dual_lam"].zero_grad()
+	training_info["loss_dual_lam"].backward()
+	state.optimizers["dual_lam"].step()
+
+
+def update_loss_qf(state: METRAAgent, data, training_info):
+	obs = torch.concat([data["observation"], data["skill"]], dim=-1)
+	next_obs = torch.concat([data["next_observation"], data["skill"]], dim=-1)
+	action = data["action"]
+	rewards = data["reward"]
+
+	with torch.no_grad():
+		alpha = state.log_alpha.param.exp()
+
+	q1_pred = state.qf1(obs, action).flatten()
+	q2_pred = state.qf2(obs, action).flatten()
+	next_action_dist, *_ = state.option_policy(next_obs)
+
+	new_next_actions_pre_tanh, new_next_actions = next_action_dist.rsample_with_pre_tanh_value()
+	new_next_action_log_probs = next_action_dist.log_prob(
+		new_next_actions,
+		pre_tanh_value=new_next_actions_pre_tanh,
+	)
+
+	target_q_values = torch.min(
+		state.target_qf1(next_obs, new_next_actions).flatten(),
+		state.target_qf2(next_obs, new_next_actions).flatten(),
+	)
+	target_q_values = target_q_values - alpha * new_next_action_log_probs
+	target_q_values = target_q_values * state.cfg.discount
+
+	with torch.no_grad():
+		q_target = rewards + target_q_values
+	loss_qf1 = torch.nn.functional.mse_loss(q1_pred, q_target) * 0.5
+	loss_qf2 = torch.nn.functional.mse_loss(q2_pred, q_target) * 0.5
+
+	training_info.update({
+		"q_target_mean": q_target.mean(),
+		"q_err_mean": ((q_target - q1_pred).mean() + (q_target - q2_pred).mean()) / 2,
+		"loss_qf1": loss_qf1,
+		"loss_qf2": loss_qf2,
+	})
+
+
+def update_loss_policy(state: METRAAgent, data, training_info):
+	with torch.no_grad():
+		alpha = state.log_alpha.param.exp()
+
+	obs = torch.concat([data["observation"], data["skill"]], dim=-1)
+	action_dists, *_ = state.option_policy(obs)
+	new_actions_pre_tanh, new_actions = action_dists.rsample_with_pre_tanh_value()
+	new_action_log_probs = action_dists.log_prob(new_actions, pre_tanh_value=new_actions_pre_tanh)
+
+	min_q_values = torch.min(
+		state.qf1(obs, new_actions).flatten(),
+		state.qf2(obs, new_actions).flatten(),
+	)
+
+	loss_policy = (alpha * new_action_log_probs - min_q_values).mean()
+	training_info.update({
+		"loss_policy": loss_policy,
+		"new_action_log_probs": new_action_log_probs,
+	})
+
+
+def update_loss_alpha(state: METRAAgent, training_info):
+	loss_alpha = (-state.log_alpha.param * (training_info["new_action_log_probs"].detach() + state.target_entropy)).mean()
+	training_info.update({
+		"loss_alpha": loss_alpha,
+	})
+
+
+def update_targets(state: METRAAgent):
+	for t_param, param in zip(state.target_qf1.parameters(), state.qf1.parameters()):
+		t_param.data.copy_(t_param.data * (1 - state.cfg.tau) + param.data * state.cfg.tau)
+
+	for t_param, param in zip(state.target_qf2.parameters(), state.qf2.parameters()):
+		t_param.data.copy_(t_param.data * (1 - state.cfg.tau) + param.data * state.cfg.tau)
+
+
+def optimize_op(state: METRAAgent, data, training_info):
+	update_loss_qf(state, data, training_info)
+	state.optimizers["qf"].zero_grad()
+	(training_info["loss_qf1"] + training_info["loss_qf2"]).backward()
+	state.optimizers["qf"].step()
+
+	update_loss_policy(state, data, training_info)
+	state.optimizers["option_policy"].zero_grad()
+	training_info["loss_policy"].backward()
+	state.optimizers["option_policy"].step()
+
+	update_loss_alpha(state, training_info)
+	state.optimizers["log_alpha"].zero_grad()
+	training_info["loss_alpha"].backward()
+	state.optimizers["log_alpha"].step()
+
+	update_targets(state)
+
+
+def train_once(state: METRAAgent):
+	data = move_batch_to_device(state.replay_buffer.sample(), state.device)
+	training_info = {}
+
+	optimize_te(state, data, training_info)
+	update_skill_rewards(state, data, training_info)
+	optimize_op(state, data, training_info)
+
+	return training_info, data
+
+
+__all__ = [
+	"NotebookMETRAState",
+	"move_batch_to_device",
+	"train_once",
+]

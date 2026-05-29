@@ -57,6 +57,7 @@ class AntEnv(MujocoTrait, mujoco_env.MujocoEnv, utils.EzPickle):
                  done_allowing_step_unit=None,
                  original_env=False,
                  render_hw=100,
+                 obs_norm=False,
                  ):
         utils.EzPickle.__init__(**locals())
 
@@ -77,6 +78,7 @@ class AntEnv(MujocoTrait, mujoco_env.MujocoEnv, utils.EzPickle):
         self._done_allowing_step_unit = done_allowing_step_unit
         self._original_env = original_env
         self.render_hw = render_hw
+        self._norm = obs_norm
 
         # Settings from
         # https://github.com/openai/gym/blob/master/gym/envs/__init__.py
@@ -178,11 +180,18 @@ class AntEnv(MujocoTrait, mujoco_env.MujocoEnv, utils.EzPickle):
                 self.sim.data.qpos.flat[:15],
                 self.sim.data.qvel.flat[:14],
             ])
+
+            if self._norm:
+                obs =  _apply_normalize_obs(obs, normalizer_mean, normalizer_std)
+
         else:
             obs = np.concatenate([
                 self.sim.data.qpos.flat[2:15],
                 self.sim.data.qvel.flat[:14],
             ])
+
+            if self._norm:
+                obs = _apply_normalize_obs(obs, normalizer_mean[2:], normalizer_std[2:])
 
         if self._expose_body_coms is not None:
             for name in self._expose_body_coms:
@@ -209,7 +218,7 @@ class AntEnv(MujocoTrait, mujoco_env.MujocoEnv, utils.EzPickle):
         if len(obs.shape) == 1:
             obs = obs[np.newaxis, :]
 
-        return _apply_normalize_obs(obs, normalizer_mean, normalizer_std)
+        return obs
 
     def _get_done(self):
         return False

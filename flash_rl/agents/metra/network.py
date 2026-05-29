@@ -1,344 +1,252 @@
 import math
+from functools import partial
+from typing import Optional
 
+import numpy as np
 import torch
-import torch.nn as nn
-from flash_rl.agents.utils.distribution import safe_tanh_log_det_jacobian
 
-from flash_rl.agents.metra.layer import (
-    EnsembleCategoricalValue,
-    EnsembleFlashSACBlock,
-    EnsembleFlashSACEmbedder,
-    EnsembleUnitRMSNorm,
-    FlashSACBlock,
-    FlashSACEmbedder,
-    NormalTanhPolicy,
-    SkillEncoderBlock,
-    UnitRMSNorm,
+from flash_rl.agents.metra.garage.gaussian_mlp_module_ex import (
+    GaussianMLPTwoHeadedModuleEx,
+    TanhNormal,
 )
+from flash_rl.agents.metra.garage.modules.mlp_module import MLPModule
+from flash_rl.agents.metra.garage.policies.stochastic_policy import StochasticPolicy
 
-from .garage import get_state_encoder
+
+def _calculate_fan_in_and_fan_out(tensor: torch.Tensor) -> tuple[int, int]:
+    dimensions = tensor.dim()
+    if dimensions < 2:
+        raise ValueError("Fan in and fan out can not be computed for tensor with fewer than 2 dimensions")
+
+    num_input_fmaps = tensor.size(1)
+    num_output_fmaps = tensor.size(0)
+    receptive_field_size = 1
+    if tensor.dim() > 2:
+        for size in tensor.shape[2:]:
+            receptive_field_size *= size
+    fan_in = num_input_fmaps * receptive_field_size
+    fan_out = num_output_fmaps * receptive_field_size
+
+    return fan_in, fan_out
 
 
-class FlashSACActor(nn.Module):
-    def __init__(
-        self,
-        num_blocks: int,
-        input_dim: int,
-        hidden_dim: int,
-        action_dim: int,
-    ):
-        super().__init__()
-        self.embedder = FlashSACEmbedder(input_dim=input_dim, hidden_dim=hidden_dim)
-        self.encoder = nn.ModuleList([FlashSACBlock(hidden_dim) for _ in range(num_blocks)])
-        self.post_norm = UnitRMSNorm(hidden_dim)
-        self.predictor = NormalTanhPolicy(hidden_dim=hidden_dim, action_dim=action_dim)
+def _no_grad_normal_(
+    tensor: torch.Tensor,
+    mean: float,
+    std: float,
+    generator: Optional[torch.Generator] = None,
+) -> torch.Tensor:
+    with torch.no_grad():
+        return tensor.normal_(mean, std, generator=generator)
 
-    def get_mean_and_std(
-        self,
-        observations: torch.Tensor,
-        training: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        x = observations
-        x = self.embedder(x, training)
-        for block in self.encoder:
-            x = block(x, training)
-        x = self.post_norm(x)
-        mean, std = self.predictor.get_mean_and_std(x, training)
-        return mean, std
 
-    def forward(
-        self,
-        observations: torch.Tensor,
-        training: bool,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        x = observations
-        x = self.embedder(x, training)
-        for block in self.encoder:
-            x = block(x, training)
-        x = self.post_norm(x)
-        actions, info = self.predictor(x, training)
+def xavier_normal_ex(tensor: torch.Tensor, gain: float = 1.0, multiplier: float = 0.1) -> torch.Tensor:
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
+    std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+    return _no_grad_normal_(tensor, 0.0, std * multiplier)
+
+
+def build_policy_module(input_dim: int, action_dim: int, hidden_sizes: list[int], hidden_nonlinearity) -> torch.nn.Module:
+    module_args = dict(
+        hidden_sizes=hidden_sizes,
+        layer_normalization=False,
+        hidden_nonlinearity=hidden_nonlinearity,
+        max_std=np.exp(2.0),
+        normal_distribution_cls=TanhNormal,
+        output_w_init=partial(xavier_normal_ex, gain=1.0),
+        init_std=1.0,
+    )
+    return GaussianMLPTwoHeadedModuleEx(
+        input_dim=input_dim,
+        output_dim=action_dim,
+        **module_args,
+    )
+
+
+def build_option_policy(skill_dim: int, module: torch.nn.Module) -> "PolicyEx":
+    return PolicyEx(
+        name="option_policy",
+        option_info={"dim_option": skill_dim},
+        module=module,
+    )
+
+
+def build_q_functions(obs_dim: int, action_dim: int, hidden_sizes: list[int], hidden_nonlinearity):
+    qf1 = ContinuousMLPQFunctionEx(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        hidden_sizes=hidden_sizes,
+        hidden_nonlinearity=hidden_nonlinearity or torch.relu,
+    )
+    qf2 = ContinuousMLPQFunctionEx(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        hidden_sizes=hidden_sizes,
+        hidden_nonlinearity=hidden_nonlinearity or torch.relu,
+    )
+    return qf1, qf2
+
+
+class PolicyEx(StochasticPolicy):
+    def __init__(self,
+                 name,
+                 *,
+                 module,
+                 clip_action=False,
+                 omit_obs_idxs=None,
+                 option_info=None,
+                 force_use_mode_actions=False,
+                 ):
+        super().__init__(env_spec=None, name=name)
+
+        self._clip_action = clip_action
+        self._omit_obs_idxs = omit_obs_idxs
+
+        self._option_info = option_info
+        self._force_use_mode_actions = force_use_mode_actions
+
+        self._module = module
+
+    def process_observations(self, observations):
+        if self._omit_obs_idxs is not None:
+            observations = observations.clone()
+            observations[:, self._omit_obs_idxs] = 0
+        return observations
+
+    def forward(self, observations):
+        observations = self.process_observations(observations)
+        dist = self._module(observations)
+        try:
+            ret_mean = dist.mean
+            ret_log_std = (dist.variance.sqrt()).log()
+            info = dict(mean=ret_mean, log_std=ret_log_std)
+        except NotImplementedError:
+            info = dict()
+        if hasattr(dist, '_normal'):
+            info.update(dict(
+                normal_mean=dist._normal.mean,
+                normal_std=dist._normal.variance.sqrt(),
+            ))
+
+        return dist, info
+
+    def forward_mode(self, observations):
+        observations = self.process_observations(observations)
+        samples = self._module.forward_mode(observations)
+        return samples, dict()
+
+    def forward_with_transform(self, observations, *, transform):
+        observations = self.process_observations(observations)
+        dist, dist_transformed = self._module.forward_with_transform(observations, transform=transform)
+        try:
+            ret_mean = dist.mean
+            ret_log_std = (dist.variance.sqrt()).log()
+            ret_mean_transformed = dist_transformed.mean.cpu()
+            ret_log_std_transformed = (dist_transformed.variance.sqrt()).log().cpu()
+            info = (dict(mean=ret_mean, log_std=ret_log_std),
+                    dict(mean=ret_mean_transformed, log_std=ret_log_std_transformed))
+        except NotImplementedError:
+            info = (dict(),
+                    dict())
+        return (dist, dist_transformed), info
+
+    def forward_with_chunks(self, observations, *, merge):
+        observations = [self.process_observations(o) for o in observations]
+        dist = self._module.forward_with_chunks(observations,
+                                                merge=merge)
+        try:
+            ret_mean = dist.mean
+            ret_log_std = (dist.variance.sqrt()).log()
+            info = dict(mean=ret_mean, log_std=ret_log_std)
+        except NotImplementedError:
+            info = dict()
+
+        return dist, info
+
+    def get_mode_actions(self, observations):
+        with torch.no_grad():
+            if not isinstance(observations, torch.Tensor):
+                observations = torch.as_tensor(observations).float().to(next(self.parameters()).device)
+            samples, info = self.forward_mode(observations)
+            return samples.cpu().numpy(), {
+                k: v.detach().cpu().numpy()
+                for (k, v) in info.items()
+            }
+
+    def get_sample_actions(self, observations):
+        with torch.no_grad():
+            if not isinstance(observations, torch.Tensor):
+                observations = torch.as_tensor(observations).float().to(next(self.parameters()).device)
+            dist, info = self.forward(observations)
+            if isinstance(dist, TanhNormal):
+                pre_tanh_values, actions = dist.rsample_with_pre_tanh_value()
+                log_probs = dist.log_prob(actions, pre_tanh_values)
+                actions = actions.detach().cpu().numpy()
+                infos = {
+                    k: v.detach().cpu().numpy()
+                    for (k, v) in info.items()
+                }
+                infos['pre_tanh_value'] = pre_tanh_values.detach().cpu().numpy()
+                infos['log_prob'] = log_probs.detach().cpu().numpy()
+            else:
+                actions = dist.sample()
+                log_probs = dist.log_prob(actions)
+                actions = actions.detach().cpu().numpy()
+                infos = {
+                    k: v.detach().cpu().numpy()
+                    for (k, v) in info.items()
+                }
+                infos['log_prob'] = log_probs.detach().cpu().numpy()
+            return actions, infos
+
+    def get_actions(self, observations):
+        assert isinstance(observations, np.ndarray) or isinstance(observations, torch.Tensor)
+        if self._force_use_mode_actions:
+            actions, info = self.get_mode_actions(observations)
+        else:
+            actions, info = self.get_sample_actions(observations)
+        if self._clip_action:
+            epsilon = 1e-6
+            actions = np.clip(
+                actions,
+                self.env_spec.action_space.low + epsilon,
+                self.env_spec.action_space.high - epsilon,
+            )
         return actions, info
 
+    def get_action(self, observation):
+        with torch.no_grad():
+            if not isinstance(observation, torch.Tensor):
+                observation = torch.as_tensor(observation).float().to(next(self.parameters()).device)
+            observation = observation.unsqueeze(0)
+            action, agent_infos = self.get_actions(observation)
+            return action[0], {k: v[0] for k, v in agent_infos.items()}
 
-class MLPGaussianActor(nn.Module):
-    """Official-style Gaussian MLP actor with tanh squashing."""
 
-    def __init__(
-        self,
-        num_layers: int,
-        input_dim: int,
-        hidden_dim: int,
-        action_dim: int,
-        log_std_min: float = -5.0,
-        log_std_max: float = 2.0,
-    ):
+class ContinuousMLPQFunctionEx(MLPModule):
+    def __init__(self, obs_dim, action_dim, **kwargs):
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+
+        MLPModule.__init__(self, input_dim=self.obs_dim+self.action_dim, output_dim=1, **kwargs)
+
+    def forward(self, observations, actions):
+        return super().forward(torch.concat([observations, actions], 1))
+
+
+class ParameterModule(torch.nn.Module):
+    def __init__(self, init_value):
         super().__init__()
-        if num_layers < 1:
-            raise ValueError("num_layers must be >= 1")
 
-        layers: list[nn.Module] = []
-        in_dim = input_dim
-        for _ in range(num_layers):
-            linear = nn.Linear(in_dim, hidden_dim)
-            nn.init.xavier_uniform_(linear.weight)
-            nn.init.zeros_(linear.bias)
-            layers.extend([linear, nn.ReLU()])
-            in_dim = hidden_dim
-        self.backbone = nn.Sequential(*layers)
-
-        self.mean = nn.Linear(hidden_dim, action_dim)
-        self.log_std = nn.Linear(hidden_dim, action_dim)
-        nn.init.xavier_uniform_(self.mean.weight)
-        nn.init.zeros_(self.mean.bias)
-        nn.init.xavier_uniform_(self.log_std.weight)
-        nn.init.zeros_(self.log_std.bias)
-
-        self.log_std_min = log_std_min
-        self.log_std_max = log_std_max
-
-    def get_mean_and_std(
-        self,
-        observations: torch.Tensor,
-        training: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        del training
-        hidden = self.backbone(observations)
-        mean = self.mean(hidden)
-        raw_log_std = self.log_std(hidden)
-        log_std = self.log_std_min + (self.log_std_max - self.log_std_min) * 0.5 * (1 + torch.tanh(raw_log_std))
-        std = torch.exp(log_std)
-        return mean, std
-
-    def forward(
-        self,
-        observations: torch.Tensor,
-        training: bool,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        mean, std = self.get_mean_and_std(observations, training)
-        dist = torch.distributions.Normal(mean, std)
-        raw_action = dist.rsample()
-        action = torch.tanh(raw_action)
-        log_prob = dist.log_prob(raw_action)
-        log_prob = log_prob - safe_tanh_log_det_jacobian(raw_action)
-        log_prob = log_prob.sum(dim=1)
-        return action, {"log_prob": log_prob}
+        self.param = torch.nn.Parameter(init_value)
 
 
-class FlashSACDoubleCritic(nn.Module):
-    """
-    Double-Q for Clipped Double Q-learning.
-    https://arxiv.org/pdf/1802.09477v3
-
-    Fuses N parallel critic networks into single batched operations.
-    All internal computation uses (N, batch, dim) tensor layout.
-    """
-
-    def __init__(
-        self,
-        num_blocks: int,
-        input_dim: int,
-        hidden_dim: int,
-        num_bins: int,
-        min_v: float,
-        max_v: float,
-        num_qs: int = 2,
-    ):
-        super().__init__()
-        self.num_qs = num_qs
-
-        self.embedder = EnsembleFlashSACEmbedder(num_qs, input_dim, hidden_dim)
-        self.encoder = nn.ModuleList([EnsembleFlashSACBlock(num_qs, hidden_dim) for _ in range(num_blocks)])
-        self.post_norm = EnsembleUnitRMSNorm(num_qs, hidden_dim)
-        self.predictor = EnsembleCategoricalValue(
-            num_ensemble=num_qs,
-            hidden_dim=hidden_dim,
-            num_bins=num_bins,
-            min_v=min_v,
-            max_v=max_v,
-        )
-
-    def forward(
-        self,
-        observations: torch.Tensor,
-        actions: torch.Tensor,
-        training: bool,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        x = torch.cat((observations, actions), dim=-1)  # [B, in_dim]
-        x = x.unsqueeze(0).expand(self.num_qs, -1, -1)  # [num_qs, B, in_dim]
-        x = self.embedder(x, training)
-        for block in self.encoder:
-            x = block(x, training)
-        x = self.post_norm(x)
-        qs, infos = self.predictor(x, training)
-        return qs, infos
-
-
-class ScalarDoubleCritic(nn.Module):
-    """Official-style scalar twin-Q critic for METRA ablations."""
-
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int,
-        num_layers: int,
-        action_dim: int,
-        num_qs: int = 2,
-    ):
-        super().__init__()
-        self.num_qs = num_qs
-
-        def build_q() -> nn.Sequential:
-            layers: list[nn.Module] = [nn.Linear(input_dim + action_dim, hidden_dim), nn.ReLU()]
-            for _ in range(num_layers - 1):
-                layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.ReLU()])
-            layers.append(nn.Linear(hidden_dim, 1))
-            net = nn.Sequential(*layers)
-            for module in net.modules():
-                if isinstance(module, nn.Linear):
-                    nn.init.xavier_uniform_(module.weight)
-                    nn.init.zeros_(module.bias)
-            return net
-
-        self.q_nets = nn.ModuleList([build_q() for _ in range(num_qs)])
-
-    def forward(
-        self,
-        observations: torch.Tensor,
-        actions: torch.Tensor,
-        training: bool,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        del training
-        critic_input = torch.cat((observations, actions), dim=-1)
-        qs = [q_net(critic_input).squeeze(-1) for q_net in self.q_nets]
-        return torch.stack(qs, dim=0), {}
-
-
-class FlashSACTemperature(nn.Module):
-    def __init__(self, initial_value: float = 0.01):
-        super().__init__()
-        self.log_temp = nn.Parameter(torch.tensor([math.log(initial_value)], dtype=torch.float32))
-
-    def forward(self) -> torch.Tensor:
-        return torch.exp(self.log_temp)
-
-
-class MetraEncoder(nn.Module):
-    """Encode observations into a normalized skill embedding."""
-
-    def __init__(
-        self,
-        obs_dim: int,
-        skill_dim: int,
-        hidden_dim: int,
-        num_layers: int,
-    ):
-        super().__init__()
-        self.encoder = SkillEncoderBlock(
-            skill_dim=skill_dim,
-            obs_dim=obs_dim,
-            hidden_dim=hidden_dim,
-            hidden_layers=num_layers,
-        )
-
-    def forward(
-        self,
-        observations: torch.Tensor,
-        training: bool,
-    ) -> torch.Tensor:
-        return self.encoder(observations, training=training)
-
-
-class MetraSimpleEncoder(nn.Module):
-    """Simple MLP encoder matching the official METRA architecture.
-
-    Plain feed-forward MLP — no residual blocks, no BatchNorm, no RMSNorm,
-    no weight normalization.  Xavier-uniform init matches the official
-    ``GaussianMLPIndependentStdModuleEx`` mean head.
-    """
-
-    def __init__(
-        self,
-        obs_dim: int,
-        skill_dim: int,
-        hidden_dim: int,
-        num_layers: int,
-        hidden_activation: str = "relu",
-    ):
-        super().__init__()
-        if num_layers < 1:
-            raise ValueError("num_layers must be >= 1")
-
-        act: nn.Module = nn.ReLU() if hidden_activation == "relu" else nn.Tanh()
-
-        layers: list[nn.Module] = []
-        # First hidden layer
-        layers.append(nn.Linear(obs_dim, hidden_dim))
-        layers.append(act)
-        # Additional hidden layers
-        for _ in range(num_layers - 1):
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
-            layers.append(act)
-        # Output layer
-        layers.append(nn.Linear(hidden_dim, skill_dim))
-
-        self.encoder = nn.Sequential(*layers)
-        self._init_weights()
-
-    def _init_weights(self) -> None:
-        for m in self.encoder.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                nn.init.zeros_(m.bias)
-
-    def forward(
-        self,
-        observations: torch.Tensor,
-        training: bool,
-    ) -> torch.Tensor:
-        return self.encoder(observations)
-
-
-class MetraGaussianEncoder(nn.Module):
-    def __init__(
-        self,
-        input_dim,
-        output_dim,
-        hidden_sizes,
-        hidden_nonlinearity=torch.relu,
-        w_init=torch.nn.init.xavier_uniform_,
-        init_std=1.0,
-        min_std=1e-6,
-        max_std=None,
-        spectral_normalization=False,
-    ):
-        super().__init__()
-        self.encoder = get_state_encoder(
-            input_dim=input_dim,
-            output_dim=output_dim,
-            hidden_sizes=hidden_sizes,
-            hidden_nonlinearity=hidden_nonlinearity,
-            w_init=w_init,
-            init_std=init_std,
-            min_std=min_std,
-            max_std=max_std,
-            spectral_normalization=spectral_normalization,
-        )
-
-    def forward(self, observations: torch.Tensor, training: bool):
-        return self.encoder(observations).mean
-
-
-class SkillEncoder(MetraEncoder):
-    """Backward-compatible alias for the METRA observation-to-skill encoder."""
-
-    pass
-
-
-class SkillSimpleEncoder(MetraSimpleEncoder):
-    """Alias for the simple MLP encoder matching the official METRA architecture."""
-
-    pass
-
-
-class SkillGEncoder(MetraGaussianEncoder):
-    pass
+__all__ = [
+    "ContinuousMLPQFunctionEx",
+    "ParameterModule",
+    "PolicyEx",
+    "build_option_policy",
+    "build_policy_module",
+    "build_q_functions",
+    "xavier_normal_ex",
+]

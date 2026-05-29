@@ -1,0 +1,24 @@
+# Global config
+project_name: 'Metra'
+group_name: 'general'
+exp_name: 'general_train'
+
+seed: 511527
+
+logger_type: 'tensorboard'
+save_path: 'models/${group_name}/${exp_name}/seed${seed}-TIMESTAMP'
+logging_per_epoch: 1
+save_checkpoint_per_epoch: 5
+save_final_checkpoint: true
+max_checkpoints_to_keep: 1
+
+epochs: 5000
+updates_per_epoch: 50
+paths_per_epoch: 8
+
+env_pos_info: true
+obs_norm: true
+
+defaults:
+- agent: general
+- _self_

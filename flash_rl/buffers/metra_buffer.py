@@ -23,6 +23,7 @@ class METRATorchBuffer(BaseBuffer):
         sample_batch_size: int,
         device_type: str,
         skill_dim: int,
+        observation_dim: int = None
     ):
         super().__init__(
             observation_space,
@@ -40,6 +41,7 @@ class METRATorchBuffer(BaseBuffer):
         )
         self._device = torch.device(device_type)
         self._skill_dim = skill_dim
+        self._observation_dim = observation_dim
         self.reset()
 
     def __len__(self) -> int:
@@ -55,7 +57,8 @@ class METRATorchBuffer(BaseBuffer):
                 self._observation_space.dtype if self._observation_space.dtype is not None else np.float32
             )
         else:
-            observation_shape = (29, )
+            assert self._observation_dim, 'observation dim info unknown'
+            observation_shape = (self._observation_dim,)
             observation_dtype = _numpy_dtype_to_torch(np.float32)
 
         action_shape = (self._action_space.shape[-1],) if self._action_space.shape is not None else (0,)
@@ -74,7 +77,6 @@ class METRATorchBuffer(BaseBuffer):
         self._terminateds = torch.empty((m,), dtype=torch.float32, device=self._device, pin_memory=pin)
         self._truncateds = torch.empty((m,), dtype=torch.float32, device=self._device, pin_memory=pin)
         self._skills = torch.empty((m, self._skill_dim), dtype=torch.float32, device=self._device, pin_memory=pin)
-        self._skill_resample_steps = torch.empty((m,), dtype=torch.int64, device=self._device, pin_memory=pin)
 
         self._n_step_transitions: deque[dict[str, Any]] = deque(maxlen=self._n_step)
         self._num_in_buffer = 0
@@ -124,7 +126,6 @@ class METRATorchBuffer(BaseBuffer):
             "truncated",
             "next_observation",
             "skill",
-            "skill_resample_step",
         }
         missing_keys = required_keys - set(transition.keys())
         if missing_keys:
@@ -149,9 +150,6 @@ class METRATorchBuffer(BaseBuffer):
             self._terminateds[idxs] = n_step_prev_transition["terminated"].to(self._terminateds.dtype)
             self._truncateds[idxs] = n_step_prev_transition["truncated"].to(self._truncateds.dtype)
             self._skills[idxs] = n_step_prev_transition["skill"].to(self._skills.dtype)
-            self._skill_resample_steps[idxs] = n_step_prev_transition["skill_resample_step"].to(
-                self._skill_resample_steps.dtype
-            )
 
             self._num_in_buffer = min(self._num_in_buffer + add_batch_size, self._max_length)
             self._current_idx = (self._current_idx + add_batch_size) % self._max_length
@@ -173,7 +171,6 @@ class METRATorchBuffer(BaseBuffer):
         batch["truncated"] = self._truncateds[idxs]
         batch["next_observation"] = self._next_observations[idxs]
         batch["skill"] = self._skills[idxs]
-        batch["skill_resample_step"] = self._skill_resample_steps[idxs]
         return batch
 
     def save(self, path: str) -> None:
@@ -187,7 +184,6 @@ class METRATorchBuffer(BaseBuffer):
             "truncated": self._truncateds[:n],
             "next_observation": self._next_observations[:n],
             "skill": self._skills[:n],
-            "skill_resample_step": self._skill_resample_steps[:n],
             "num_in_buffer": self._num_in_buffer,
             "current_idx": self._current_idx,
         }
@@ -204,7 +200,6 @@ class METRATorchBuffer(BaseBuffer):
         self._terminateds[:n] = dataset["terminated"]
         self._truncateds[:n] = dataset["truncated"]
         self._skills[:n] = dataset["skill"]
-        self._skill_resample_steps[:n] = dataset["skill_resample_step"]
 
         self._num_in_buffer = n
         self._current_idx = dataset["current_idx"]

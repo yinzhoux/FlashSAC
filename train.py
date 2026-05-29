@@ -87,6 +87,11 @@ def run(args: argparse.Namespace) -> None:
     #############################
     train_env, eval_env, record_env = create_envs(**cfg.env)
 
+    from flash_rl.envs.envs.mujoco.ant_env import AntEnv
+    metra_env = AntEnv(render_hw=100)
+    metra_eval_env = AntEnv(render_hw=100)
+    metra_record_env = AntEnv(render_hw=100)
+
     observation_space = train_env.observation_space
     action_space = train_env.action_space
 
@@ -102,6 +107,8 @@ def run(args: argparse.Namespace) -> None:
     # Therefore, for each algorithm, the network is implemented within its respective directory.
 
     _, env_info = train_env.reset()
+    _, _ = metra_env.reset()
+
     agent = create_agent(
         observation_space=observation_space,
         action_space=action_space,
